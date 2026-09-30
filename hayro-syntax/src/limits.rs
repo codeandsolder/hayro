@@ -127,11 +127,11 @@ mod tests {
 
     #[test]
     fn limit_permits_and_bound() {
-        assert!(Limit::AtMost(10u32).permits(10));
-        assert!(!Limit::AtMost(10u32).permits(11));
+        assert!(Limit::AtMost(10_u32).permits(10));
+        assert!(!Limit::AtMost(10_u32).permits(11));
         assert!(Limit::<u32>::Unlimited.permits(u32::MAX));
 
-        assert_eq!(Limit::AtMost(10u32).bound(), Some(10));
+        assert_eq!(Limit::AtMost(10_u32).bound(), Some(10));
         assert_eq!(Limit::<u32>::Unlimited.bound(), None);
     }
 
