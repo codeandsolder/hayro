@@ -285,6 +285,10 @@ impl XRef {
         // before we actually created the xref struct. So we first create it using dummy data
         // and then populate the data.
         let trailer_data = TrailerData::dummy();
+        let raw_trailer_data = match input {
+            XRefInput::TrailerDictData(data) => Some(data.to_vec()),
+            XRefInput::RootRef(_) => None,
+        };
 
         let mut xref = Self(Inner::Some(Arc::new(SomeRepr {
             data: Arc::new(Data::new(data)),
@@ -293,6 +297,7 @@ impl XRef {
             has_ocgs: false,
             metadata: Arc::new(Metadata::default()),
             trailer_data,
+            raw_trailer_data,
             password: password.to_vec(),
         })));
 
@@ -419,6 +424,27 @@ impl XRef {
     /// Return the object ID of the root dictionary.
     pub fn root_id(&self) -> ObjectIdentifier {
         self.trailer_data().root_ref
+    }
+
+    /// Return the object identifiers indexed by this cross-reference table.
+    pub fn object_ids(&self) -> Vec<ObjectIdentifier> {
+        match &self.0 {
+            Inner::Dummy => Vec::new(),
+            Inner::Some(repr) => repr.map.get().xref_map.keys().copied().collect(),
+        }
+    }
+
+    /// Return the final trailer dictionary used to construct this xref table.
+    ///
+    /// For PDFs recovered without a trailer dictionary, this returns `None`.
+    /// Xref streams are exposed through the same dictionary view; stream-only
+    /// mechanics such as `/W` and `/Index` are therefore visible to callers.
+    pub fn trailer(&self) -> Option<Dict<'_>> {
+        let Inner::Some(repr) = &self.0 else {
+            return None;
+        };
+        let data = repr.raw_trailer_data.as_deref()?;
+        Reader::new(data).read_with_context::<Dict<'_>>(&ReaderContext::new(self, false))
     }
 
     /// Whether the PDF has optional content groups.
@@ -681,6 +707,7 @@ struct SomeRepr {
     has_ocgs: bool,
     password: Vec<u8>,
     trailer_data: TrailerData,
+    raw_trailer_data: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1150,5 +1177,111 @@ mod tests {
         let data = b"xref\n0 999999999999999999999\ntrailer\n<<>>";
         let mut reader = Reader::new(data);
         assert!(read_xref_table_trailer(&mut reader, &ReaderContext::dummy()).is_none());
+    }
+
+    #[test]
+    fn exposes_classic_trailer_dictionary() {
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        );
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n",
+        );
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"3 0 obj\n<< /Producer (hayro-test) >>\nendobj\n",
+        );
+
+        let xref_offset = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size 4 /Root 1 0 R /Info 3 0 R /ID [(abc) (def)] /Custom /Keep >>\nstartxref\n{xref_offset}\n%%EOF\n"
+            )
+            .as_bytes(),
+        );
+
+        let parsed = crate::Pdf::new(pdf).unwrap();
+        let trailer = parsed.xref().trailer().unwrap();
+        assert_eq!(trailer.get_ref(INFO), Some(object::ObjRef::new(3, 0)));
+        assert_eq!(
+            trailer.get::<Name<'_>>(b"Custom").as_deref(),
+            Some(b"Keep".as_slice())
+        );
+        assert!(trailer.contains_key(ID));
+    }
+
+    #[test]
+    fn exposes_xref_stream_dictionary_as_trailer() {
+        let mut pdf = b"%PDF-1.5\n".to_vec();
+        let mut offsets = Vec::new();
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        );
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n",
+        );
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"3 0 obj\n<< /Producer (hayro-test) >>\nendobj\n",
+        );
+
+        let xref_offset = pdf.len();
+        let mut entries = Vec::new();
+        push_test_xref_entry(&mut entries, 0, 0, 65535);
+        for &offset in &offsets {
+            push_test_xref_entry(&mut entries, 1, offset as u32, 0);
+        }
+        push_test_xref_entry(&mut entries, 1, xref_offset as u32, 0);
+
+        pdf.extend_from_slice(
+            format!(
+                "4 0 obj\n<< /Type /XRef /Size 5 /W [1 4 2] /Root 1 0 R /Info 3 0 R /ID [(abc) (def)] /Custom /Keep /Length {} >>\nstream\n",
+                entries.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(&entries);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+        let parsed = crate::Pdf::new(pdf).unwrap();
+        let trailer = parsed.xref().trailer().unwrap();
+        assert_eq!(trailer.get_ref(INFO), Some(object::ObjRef::new(3, 0)));
+        assert_eq!(
+            trailer.get::<Name<'_>>(b"Custom").as_deref(),
+            Some(b"Keep".as_slice())
+        );
+        assert!(trailer.contains_key(ID));
+        assert_eq!(
+            trailer.get::<Name<'_>>(TYPE).as_deref(),
+            Some(b"XRef".as_slice())
+        );
+    }
+
+    fn append_test_object(pdf: &mut Vec<u8>, offsets: &mut Vec<usize>, object: &[u8]) {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(object);
+    }
+
+    fn push_test_xref_entry(entries: &mut Vec<u8>, kind: u8, field2: u32, field3: u16) {
+        entries.push(kind);
+        entries.extend_from_slice(&field2.to_be_bytes());
+        entries.extend_from_slice(&field3.to_be_bytes());
     }
 }
