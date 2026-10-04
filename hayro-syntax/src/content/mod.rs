@@ -44,7 +44,7 @@ use crate::trivia::is_white_space_character;
 use crate::util::find_needle;
 use core::array;
 use core::fmt::{Debug, Display, Formatter};
-use core::ops::Deref;
+use core::ops::{Deref, Range};
 use smallvec::SmallVec;
 
 // 6 operands are used for example for ctm or cubic curves,
@@ -124,6 +124,19 @@ impl<'a> UntypedIter<'a> {
         }
     }
 
+    /// Return whether the iterator has consumed the entire content stream.
+    ///
+    /// After [`Self::next`] returns `None`, this distinguishes a clean EOF from
+    /// a malformed token that stopped parsing before the end of the input.
+    pub fn is_at_end(&self) -> bool {
+        self.reader.at_end()
+    }
+
+    /// Current byte offset in the original content stream.
+    pub fn offset(&self) -> usize {
+        self.reader.offset()
+    }
+
     /// Return the next instruction.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<Instruction<'_, 'a>> {
@@ -145,14 +158,17 @@ impl<'a> UntypedIter<'a> {
                 // no operator that starts with a number). In order to preserve
                 // similar behavior to Acrobat and Chromium, we try to consume
                 // such an operator and then simply skip it.
+                let operand_start = self.reader.offset();
                 if let Some(object) = self.reader.read_without_context::<Object<'_>>() {
-                    self.stack.push(object)?;
+                    let operand_end = self.reader.offset();
+                    self.stack.push(object, operand_start..operand_end)?;
                 } else if self.reader.read_without_context::<Operator<'_>>().is_some() {
                     self.stack.clear();
                 } else {
                     return None;
                 }
             } else {
+                let operator_start = self.reader.offset();
                 let operator = match self.reader.read_without_context::<Operator<'_>>() {
                     Some(o) => o,
                     None => {
@@ -162,6 +178,7 @@ impl<'a> UntypedIter<'a> {
                         return None;
                     }
                 };
+                let operator_token_end = self.reader.offset();
 
                 // Inline images need special casing...
                 if operator.as_ref() == b"BI" {
@@ -290,9 +307,11 @@ impl<'a> UntypedIter<'a> {
                                 find_reader.read_byte()?;
                             }
 
-                            self.stack.push(Object::Stream(stream))?;
-
                             self.reader.read_bytes(2)?;
+                            self.stack.push(
+                                Object::Stream(stream),
+                                operator_start..self.reader.offset(),
+                            )?;
                             self.reader.skip_white_spaces();
 
                             break;
@@ -300,10 +319,18 @@ impl<'a> UntypedIter<'a> {
                     }
                 }
 
+                let operator_end = self.reader.offset();
+                let instruction_start = self
+                    .stack
+                    .spans_slice()
+                    .first()
+                    .map_or(operator_start, |span| span.0);
                 self.operator = Some(operator);
                 return Some(Instruction {
                     operands: &self.stack,
                     operator: self.operator.as_ref().unwrap(),
+                    operator_span: operator_start..operator_token_end,
+                    span: instruction_start..operator_end,
                 });
             }
 
@@ -372,12 +399,32 @@ pub struct Instruction<'b, 'a> {
     pub operands: &'b Stack<'a>,
     /// The actual operator.
     pub operator: &'b Operator<'a>,
+    operator_span: Range<usize>,
+    span: Range<usize>,
 }
 
 impl<'b, 'a> Instruction<'b, 'a> {
     /// An iterator over the operands of the instruction.
     pub fn operands(&self) -> OperandIterator<'b, 'a> {
         OperandIterator::new(self.operands)
+    }
+
+    /// Byte span of the operator token itself in the original content stream.
+    pub fn operator_span(&self) -> Range<usize> {
+        self.operator_span.clone()
+    }
+
+    /// Byte span covering all operands and the operator in the original content stream.
+    pub fn span(&self) -> Range<usize> {
+        self.span.clone()
+    }
+
+    /// Byte spans for each operand, in the same order as [`Self::operands`].
+    pub fn operand_spans(&self) -> impl ExactSizeIterator<Item = Range<usize>> + '_ {
+        self.operands
+            .spans_slice()
+            .iter()
+            .map(|&(start, end)| start..end)
     }
 }
 
@@ -386,6 +433,7 @@ pub struct Stack<'a> {
     // TODO: Explore using an object pool to avoid repeatedly
     // allocating/deallocating objects.
     data: [Object<'a>; OPERANDS_THRESHOLD],
+    spans: [(usize, usize); OPERANDS_THRESHOLD],
     len: usize,
 }
 
@@ -400,16 +448,18 @@ impl<'a> Stack<'a> {
     pub fn new() -> Self {
         Self {
             data: array::from_fn(|_| Object::Null(Null)),
+            spans: [(0, 0); OPERANDS_THRESHOLD],
             len: 0,
         }
     }
 
-    fn push(&mut self, operand: Object<'a>) -> Option<()> {
+    fn push(&mut self, operand: Object<'a>, span: Range<usize>) -> Option<()> {
         if self.len >= OPERANDS_THRESHOLD {
             return None;
         }
 
         self.data[self.len] = operand;
+        self.spans[self.len] = (span.start, span.end);
         self.len += 1;
         Some(())
     }
@@ -424,6 +474,10 @@ impl<'a> Stack<'a> {
 
     fn as_slice(&self) -> &[Object<'a>] {
         &self.data[..self.len]
+    }
+
+    fn spans_slice(&self) -> &[(usize, usize)] {
+        &self.spans[..self.len]
     }
 
     fn get<'b, T>(&'b self, index: usize) -> Option<T>
@@ -457,8 +511,8 @@ impl Debug for Stack<'_> {
 impl Clone for Stack<'_> {
     fn clone(&self) -> Self {
         let mut stack = Self::new();
-        for item in self.as_slice() {
-            stack.push(item.clone()).unwrap();
+        for (item, &(start, end)) in self.as_slice().iter().zip(self.spans_slice()) {
+            stack.push(item.clone(), start..end).unwrap();
         }
         stack
     }
@@ -725,4 +779,31 @@ mod macros {
     pub(crate) use op3;
     pub(crate) use op4;
     pub(crate) use op6;
+}
+
+#[cfg(test)]
+mod span_tests {
+    use super::UntypedIter;
+
+    #[test]
+    fn exposes_instruction_and_operand_spans() {
+        let input = b"  12 -3.5 /Name  cm\nq";
+        let mut iter = UntypedIter::new(input);
+        let first = iter.next().unwrap();
+        assert_eq!(&first.operator[..], b"cm");
+        assert_eq!(first.span(), 2..19);
+        assert_eq!(first.operator_span(), 17..19);
+        assert_eq!(
+            first.operand_spans().collect::<Vec<_>>(),
+            vec![2..4, 5..9, 10..15]
+        );
+        let second = iter.next().unwrap();
+        assert_eq!(&second.operator[..], b"q");
+        assert_eq!(second.span(), 20..21);
+        assert_eq!(second.operator_span(), 20..21);
+        assert!(second.operand_spans().next().is_none());
+        assert!(iter.next().is_none());
+        assert!(iter.is_at_end());
+        assert_eq!(iter.offset(), input.len());
+    }
 }
