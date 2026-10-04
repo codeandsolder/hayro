@@ -30,6 +30,19 @@ pub struct Stream<'a> {
     data: &'a [u8],
 }
 
+/// Decode standalone stream bytes using a serialized stream dictionary.
+///
+/// This is intended for copy-on-write/editing layers that already own the
+/// encoded payload and filter dictionary but do not have a source [`Pdf`](crate::Pdf)
+/// stream object. The dictionary must be a complete PDF dictionary object such
+/// as `<< /Filter /FlateDecode >>`.
+pub fn decode_standalone_stream(dictionary: &[u8], data: &[u8]) -> Result<Vec<u8>, DecodeFailure> {
+    let dict = Reader::new(dictionary)
+        .read_without_context::<Dict<'_>>()
+        .ok_or(DecodeFailure::Unknown)?;
+    Stream::new(data, dict).decoded().map(Cow::into_owned)
+}
+
 impl PartialEq for Stream<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.dict == other.dict && self.data == other.data
