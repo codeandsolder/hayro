@@ -515,19 +515,31 @@ impl XRef {
         }
     }
 
-    pub(crate) fn repair(&self) {
+    fn repair_entry(&self, id: ObjectIdentifier, broken_entry: EntryType) -> bool {
         let Inner::Some(r) = &self.0 else {
             unreachable!();
         };
 
+        let (fallback, _) = fallback_xref_map(r.data.get(), &r.password, r.limits);
+        let replacement = fallback.get(&id).copied();
         let mut locked = r.map.put();
-        if locked.repaired {
-            return;
+        if locked.xref_map.get(&id).copied() != Some(broken_entry) {
+            return locked.xref_map.contains_key(&id);
         }
 
-        let (xref_map, _) = fallback_xref_map(r.data.get(), &r.password, r.limits);
-        locked.xref_map = xref_map;
-        locked.repaired = true;
+        match replacement {
+            Some(entry) if entry != broken_entry => {
+                locked.xref_map.insert(id, entry);
+                true
+            }
+            _ => {
+                // One corrupt entry must not discard a valid xref-stream map.
+                // In particular, a fallback file scan cannot reliably reconstruct
+                // every compressed-object entry from otherwise-valid object streams.
+                locked.xref_map.remove(&id);
+                false
+            }
+        }
     }
 
     #[inline]
@@ -610,20 +622,18 @@ impl XRef {
                     }
                 };
 
-                // The xref table is broken, try to repair if not already repaired.
+                // Repair only this entry. Replacing the complete xref map because one
+                // normal entry is corrupt can discard valid compressed-object entries.
                 if was_repaired {
                     error!(
                         "attempt was made at repairing xref, but object {id:?} still couldn't be read"
                     );
-
                     None
                 } else {
-                    warn!("broken xref, attempting to repair");
-
-                    self.repair();
-
-                    // Now try reading again.
-                    self.get_with::<T>(id, &ctx)
+                    warn!("broken xref entry for {id:?}, attempting targeted repair");
+                    self.repair_entry(id, entry)
+                        .then(|| self.get_with::<T>(id, &ctx))
+                        .flatten()
                 }
             }
             EntryType::ObjStream(obj_stram_gen_num, index) => {
@@ -1286,6 +1296,69 @@ mod tests {
             trailer.get::<Name<'_>>(TYPE).as_deref(),
             Some(b"XRef".as_slice())
         );
+    }
+
+    #[test]
+    fn corrupt_normal_entry_does_not_discard_compressed_objects() {
+        let mut pdf = b"%PDF-1.5\n".to_vec();
+        let catalog_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        let object_stream_offset = pdf.len();
+        let object_stream_data = b"2 0 << /Type /Pages /Kids [] /Count 0 >>";
+        pdf.extend_from_slice(
+            format!(
+                "3 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Length {} >>\nstream\n",
+                object_stream_data.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(object_stream_data);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+        let xref_offset = pdf.len();
+        let mut entries = Vec::new();
+        push_test_xref_entry(&mut entries, 0, 0, 65535);
+        push_test_xref_entry(&mut entries, 1, catalog_offset as u32, 0);
+        push_test_xref_entry(&mut entries, 2, 3, 0);
+        push_test_xref_entry(&mut entries, 1, object_stream_offset as u32, 0);
+        // Deliberately corrupt object 4 by pointing it at object 1.
+        push_test_xref_entry(&mut entries, 1, catalog_offset as u32, 0);
+        push_test_xref_entry(&mut entries, 1, xref_offset as u32, 0);
+        pdf.extend_from_slice(
+            format!(
+                "5 0 obj\n<< /Type /XRef /Size 6 /W [1 4 2] /Root 1 0 R /Length {} >>\nstream\n",
+                entries.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(&entries);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+        let parsed = crate::Pdf::new(pdf).unwrap();
+        assert!(
+            parsed
+                .xref()
+                .get::<Dict<'_>>(ObjectIdentifier::new(2, 0))
+                .is_some()
+        );
+        assert!(
+            parsed
+                .xref()
+                .get::<Object<'_>>(ObjectIdentifier::new(4, 0))
+                .is_none()
+        );
+        assert!(
+            parsed
+                .xref()
+                .get::<Dict<'_>>(ObjectIdentifier::new(2, 0))
+                .is_some()
+        );
+        let Inner::Some(repr) = &parsed.xref().0 else {
+            unreachable!()
+        };
+        assert!(!repr.map.get().repaired);
     }
 
     fn append_test_object(pdf: &mut Vec<u8>, offsets: &mut Vec<usize>, object: &[u8]) {
