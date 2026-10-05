@@ -43,6 +43,25 @@ pub fn decode_standalone_stream(dictionary: &[u8], data: &[u8]) -> Result<Vec<u8
     Stream::new(data, dict).decoded().map(Cow::into_owned)
 }
 
+/// Decode standalone image-stream bytes with explicit image metadata.
+///
+/// Image filters such as DCT, JPX, JBIG2, and CCITT need dimensions and
+/// component information that are normally supplied by the containing image
+/// XObject. Copy-on-write callers can provide that metadata here without
+/// constructing a complete [`Pdf`](crate::Pdf).
+pub fn decode_standalone_image_stream(
+    dictionary: &[u8],
+    data: &[u8],
+    image_params: &ImageDecodeParams,
+) -> Result<Vec<u8>, DecodeFailure> {
+    let dict = Reader::new(dictionary)
+        .read_without_context::<Dict<'_>>()
+        .ok_or(DecodeFailure::Unknown)?;
+    Stream::new(data, dict)
+        .decoded_image(image_params)
+        .map(|result| result.data.into_owned())
+}
+
 impl PartialEq for Stream<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.dict == other.dict && self.data == other.data
