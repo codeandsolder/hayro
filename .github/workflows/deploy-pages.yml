@@ -33,7 +33,7 @@ jobs:
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: 1.99.0
           override: true
           
       - name: Install wasm-pack
