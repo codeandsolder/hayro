@@ -313,7 +313,11 @@ impl XRef {
 
         let mut xref = Self(Inner::Some(Arc::new(SomeRepr {
             data: Arc::new(Data::new(data)),
-            map: Arc::new(RwLock::new(MapRepr { xref_map, repaired })),
+            map: Arc::new(RwLock::new(MapRepr {
+                xref_map,
+                repaired,
+                repair_map: None,
+            })),
             decryptor: Arc::new(Decryptor::None),
             has_ocgs: false,
             metadata: Arc::new(Metadata::default()),
@@ -520,8 +524,17 @@ impl XRef {
             unreachable!();
         };
 
-        let (fallback, _) = fallback_xref_map(r.data.get(), &r.password, r.limits);
-        let replacement = fallback.get(&id).copied();
+        let cached_repair_map = r.map.get().repair_map.clone();
+        let repair_map = cached_repair_map.unwrap_or_else(|| {
+            let (fallback, _) = fallback_xref_map(r.data.get(), &r.password, r.limits);
+            let fallback = Arc::new(fallback);
+            let mut locked = r.map.put();
+            locked
+                .repair_map
+                .get_or_insert_with(|| fallback.clone())
+                .clone()
+        });
+        let replacement = repair_map.get(&id).copied();
         let mut locked = r.map.put();
         if locked.xref_map.get(&id).copied() != Some(broken_entry) {
             return locked.xref_map.contains_key(&id);
@@ -702,6 +715,10 @@ type XrefMap = FxHashMap<ObjectIdentifier, EntryType>;
 struct MapRepr {
     xref_map: XrefMap,
     repaired: bool,
+    // A targeted repair needs the same full-file fallback scan regardless of
+    // which broken entry triggered it. Cache that scan so a PDF with many bad
+    // xref offsets pays the recovery cost once instead of once per lookup.
+    repair_map: Option<Arc<XrefMap>>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1358,7 +1375,9 @@ mod tests {
         let Inner::Some(repr) = &parsed.xref().0 else {
             unreachable!()
         };
-        assert!(!repr.map.get().repaired);
+        let map = repr.map.get();
+        assert!(!map.repaired);
+        assert!(map.repair_map.is_some());
     }
 
     fn append_test_object(pdf: &mut Vec<u8>, offsets: &mut Vec<usize>, object: &[u8]) {
