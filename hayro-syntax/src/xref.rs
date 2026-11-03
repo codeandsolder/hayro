@@ -318,6 +318,7 @@ impl XRef {
                 repaired,
                 repair_map: None,
             })),
+            object_stream_offsets: Arc::new(RwLock::new(FxHashMap::default())),
             decryptor: Arc::new(Decryptor::None),
             has_ocgs: false,
             metadata: Arc::new(Metadata::default()),
@@ -543,6 +544,7 @@ impl XRef {
         match replacement {
             Some(entry) if entry != broken_entry => {
                 locked.xref_map.insert(id, entry);
+                r.object_stream_offsets.put().clear();
                 true
             }
             _ => {
@@ -550,6 +552,7 @@ impl XRef {
                 // In particular, a fallback file scan cannot reliably reconstruct
                 // every compressed-object entry from otherwise-valid object streams.
                 locked.xref_map.remove(&id);
+                r.object_stream_offsets.put().clear();
                 false
             }
         }
@@ -661,10 +664,31 @@ impl XRef {
 
                 ctx.parent_chain_push(id);
 
-                let stream = self.get_with::<Stream<'_>>(obj_stream_id, &ctx)?;
                 let data = repr.data.get_with(obj_stream_id, &ctx)?;
-                let object_stream = ObjectStream::new(stream, data, &ctx)?;
-                object_stream.get(index)
+                let cached_offsets = {
+                    repr.object_stream_offsets
+                        .get()
+                        .get(&obj_stream_id)
+                        .cloned()
+                };
+                let offsets = if let Some(offsets) = cached_offsets {
+                    offsets
+                } else {
+                    let stream = self.get_with::<Stream<'_>>(obj_stream_id, &ctx)?;
+                    let parsed = Arc::new(ObjectStream::parse_offsets(&stream, data)?);
+                    let mut cache = repr.object_stream_offsets.put();
+                    cache
+                        .entry(obj_stream_id)
+                        .or_insert_with(|| Arc::clone(&parsed))
+                        .clone()
+                };
+                let offset = offsets.get(index as usize)?.1;
+                let mut reader = Reader::new(data);
+                reader.jump(offset);
+                reader.skip_white_spaces_and_comments();
+                let mut object_ctx = ctx.clone();
+                object_ctx.set_in_object_stream(true);
+                reader.read_with_context::<T>(&object_ctx)
             }
         }
     }
@@ -709,6 +733,7 @@ enum EntryType {
 }
 
 type XrefMap = FxHashMap<ObjectIdentifier, EntryType>;
+type ObjectStreamOffsetCache = FxHashMap<ObjectIdentifier, Arc<Vec<(u32, usize)>>>;
 
 /// Representation of a proper xref table.
 #[derive(Debug)]
@@ -742,6 +767,7 @@ impl TrailerData {
 struct SomeRepr {
     data: Arc<Data>,
     map: Arc<RwLock<MapRepr>>,
+    object_stream_offsets: Arc<RwLock<ObjectStreamOffsetCache>>,
     metadata: Arc<Metadata>,
     decryptor: Arc<Decryptor>,
     has_ocgs: bool,
@@ -1118,23 +1144,24 @@ struct ObjectStream<'a> {
 }
 
 impl<'a> ObjectStream<'a> {
-    fn new(inner: Stream<'_>, data: &'a [u8], ctx: &ReaderContext<'a>) -> Option<Self> {
+    fn parse_offsets(inner: &Stream<'_>, data: &[u8]) -> Option<Vec<(u32, usize)>> {
         let num_objects = inner.dict().get::<usize>(N)?;
         let first_offset = inner.dict().get::<usize>(FIRST)?;
 
         let mut r = Reader::new(data);
-
         let mut offsets = vec![];
-
         for _ in 0..num_objects {
             r.skip_white_spaces_and_comments();
-            // Skip object number
             let obj_num = r.read_without_context::<u32>()?;
             r.skip_white_spaces_and_comments();
             let relative_offset = r.read_without_context::<usize>()?;
             offsets.push((obj_num, first_offset + relative_offset));
         }
+        Some(offsets)
+    }
 
+    fn new(inner: Stream<'_>, data: &'a [u8], ctx: &ReaderContext<'a>) -> Option<Self> {
+        let offsets = Self::parse_offsets(&inner, data)?;
         let mut ctx = ctx.clone();
         ctx.set_in_object_stream(true);
 
@@ -1313,6 +1340,80 @@ mod tests {
             trailer.get::<Name<'_>>(TYPE).as_deref(),
             Some(b"XRef".as_slice())
         );
+    }
+
+    #[test]
+    fn caches_object_stream_offsets_across_member_reads() {
+        let mut pdf = b"%PDF-1.5\n".to_vec();
+        let catalog_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        let pages = b"<< /Type /Pages /Kids [] /Count 0 >>";
+        let extra = b"<< /Value 42 >>";
+        let extra_offset = pages.len() + 1;
+        let header = format!("2 0 4 {extra_offset} ");
+        let first = header.len();
+        let mut object_stream_data = header.into_bytes();
+        object_stream_data.extend_from_slice(pages);
+        object_stream_data.push(b' ');
+        object_stream_data.extend_from_slice(extra);
+
+        let object_stream_offset = pdf.len();
+        pdf.extend_from_slice(
+            format!(
+                "3 0 obj\n<< /Type /ObjStm /N 2 /First {first} /Length {} >>\nstream\n",
+                object_stream_data.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(&object_stream_data);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+        let xref_offset = pdf.len();
+        let mut entries = Vec::new();
+        push_test_xref_entry(&mut entries, 0, 0, 65535);
+        push_test_xref_entry(&mut entries, 1, catalog_offset as u32, 0);
+        push_test_xref_entry(&mut entries, 2, 3, 0);
+        push_test_xref_entry(&mut entries, 1, object_stream_offset as u32, 0);
+        push_test_xref_entry(&mut entries, 2, 3, 1);
+        push_test_xref_entry(&mut entries, 1, xref_offset as u32, 0);
+        pdf.extend_from_slice(
+            format!(
+                "5 0 obj\n<< /Type /XRef /Size 6 /W [1 4 2] /Root 1 0 R /Length {} >>\nstream\n",
+                entries.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(&entries);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+        let parsed = crate::Pdf::new(pdf).unwrap();
+        let Inner::Some(repr) = &parsed.xref().0 else {
+            unreachable!()
+        };
+        repr.object_stream_offsets.put().clear();
+
+        let extra = parsed
+            .xref()
+            .get::<Dict<'_>>(ObjectIdentifier::new(4, 0))
+            .unwrap();
+        assert_eq!(extra.get::<i32>(b"Value"), Some(42));
+        assert_eq!(repr.object_stream_offsets.get().len(), 1);
+
+        let pages = parsed
+            .xref()
+            .get::<Dict<'_>>(ObjectIdentifier::new(2, 0))
+            .unwrap();
+        assert_eq!(pages.get::<i32>(b"Count"), Some(0));
+        assert_eq!(repr.object_stream_offsets.get().len(), 1);
+
+        let extra_again = parsed
+            .xref()
+            .get::<Dict<'_>>(ObjectIdentifier::new(4, 0))
+            .unwrap();
+        assert_eq!(extra_again.get::<i32>(b"Value"), Some(42));
+        assert_eq!(repr.object_stream_offsets.get().len(), 1);
     }
 
     #[test]
