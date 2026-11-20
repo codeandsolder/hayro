@@ -774,6 +774,19 @@ mod span_tests {
     use alloc::{vec, vec::Vec};
 
     #[test]
+    fn exposes_inline_image_spans() {
+        let input = b"q BI /W 1 /H 1 /BPC 8 /CS /G ID x EI Q";
+        let mut iter = UntypedIter::new(input);
+        assert_eq!(iter.next().unwrap().operator_span(), 0..1);
+        let image = iter.next().unwrap();
+        assert_eq!(&input[image.operator_span()], b"BI");
+        let operand = image.operand_spans().next().unwrap();
+        assert_eq!(&input[operand], b"BI /W 1 /H 1 /BPC 8 /CS /G ID x EI");
+        let last = iter.next().unwrap();
+        assert_eq!(&input[last.operator_span()], b"Q");
+    }
+
+    #[test]
     fn exposes_instruction_and_operand_spans() {
         let input = b"  12 -3.5 /Name  cm\nq";
         let mut iter = UntypedIter::new(input);
