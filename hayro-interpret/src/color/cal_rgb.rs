@@ -187,7 +187,7 @@ impl ToRgb for CalRgb {
 
     fn convert_in_place(&self, input: &mut [u8]) -> Option<()> {
         for input in input.as_chunks_mut::<3>().0 {
-            input.copy_from_slice(&self.convert_pixel([input[0], input[1], input[2]]));
+            *input = self.convert_pixel(*input);
         }
 
         Some(())
