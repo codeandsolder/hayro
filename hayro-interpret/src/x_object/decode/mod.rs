@@ -204,11 +204,11 @@ fn decode_u8_samples(
                 .collect::<Option<Vec<_>>>()?,
         ),
         16 => Some(
-            data.chunks_exact(2)
+            data.as_chunks::<2>()
+                .0
+                .iter()
                 .enumerate()
-                .map(|(index, value)| {
-                    decode_component(u16::from_be_bytes([value[0], value[1]]) as u32, index)
-                })
+                .map(|(index, value)| decode_component(u16::from_be_bytes(*value) as u32, index))
                 .collect::<Option<Vec<_>>>()?,
         ),
         _ => {
@@ -246,8 +246,10 @@ fn unpack_samples(
         }
         8 => Some(data.iter().map(|value| *value as u16).collect()),
         16 => Some(
-            data.chunks_exact(2)
-                .map(|value| u16::from_be_bytes([value[0], value[1]]))
+            data.as_chunks::<2>()
+                .0
+                .iter()
+                .map(|value| u16::from_be_bytes(*value))
                 .collect(),
         ),
         _ => {

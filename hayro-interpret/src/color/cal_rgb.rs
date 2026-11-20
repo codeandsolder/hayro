@@ -173,7 +173,12 @@ impl CalRgb {
 
 impl ToRgb for CalRgb {
     fn convert(&self, input: &[u8], output: &mut [u8]) -> Option<()> {
-        for (input, output) in input.chunks_exact(3).zip(output.chunks_exact_mut(3)) {
+        for (input, output) in input
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(output.as_chunks_mut::<3>().0.iter_mut())
+        {
             output.copy_from_slice(&self.convert_pixel([input[0], input[1], input[2]]));
         }
 
@@ -181,7 +186,7 @@ impl ToRgb for CalRgb {
     }
 
     fn convert_in_place(&self, input: &mut [u8]) -> Option<()> {
-        for input in input.chunks_exact_mut(3) {
+        for input in input.as_chunks_mut::<3>().0 {
             input.copy_from_slice(&self.convert_pixel([input[0], input[1], input[2]]));
         }
 
