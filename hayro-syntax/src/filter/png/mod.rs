@@ -1,7 +1,5 @@
 //! Taken from the png crate, see <https://github.com/image-rs/image-png/blob/master/src/filter/mod.rs>
 
-use core::convert::TryInto;
-
 mod paeth;
 
 #[derive(Debug, Clone, Copy)]
@@ -85,43 +83,43 @@ pub(crate) fn unfilter(
             }
             BytesPerPixel::Two => {
                 let mut prev = [0; 2];
-                for chunk in current.chunks_exact_mut(2) {
+                for chunk in current.as_chunks_mut::<2>().0.iter_mut() {
                     let new_chunk = [
                         chunk[0].wrapping_add(prev[0]),
                         chunk[1].wrapping_add(prev[1]),
                     ];
-                    *TryInto::<&mut [u8; 2]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     prev = new_chunk;
                 }
             }
             BytesPerPixel::Three => {
                 let mut prev = [0; 3];
-                for chunk in current.chunks_exact_mut(3) {
+                for chunk in current.as_chunks_mut::<3>().0.iter_mut() {
                     let new_chunk = [
                         chunk[0].wrapping_add(prev[0]),
                         chunk[1].wrapping_add(prev[1]),
                         chunk[2].wrapping_add(prev[2]),
                     ];
-                    *TryInto::<&mut [u8; 3]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     prev = new_chunk;
                 }
             }
             BytesPerPixel::Four => {
                 let mut prev = [0; 4];
-                for chunk in current.chunks_exact_mut(4) {
+                for chunk in current.as_chunks_mut::<4>().0.iter_mut() {
                     let new_chunk = [
                         chunk[0].wrapping_add(prev[0]),
                         chunk[1].wrapping_add(prev[1]),
                         chunk[2].wrapping_add(prev[2]),
                         chunk[3].wrapping_add(prev[3]),
                     ];
-                    *TryInto::<&mut [u8; 4]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     prev = new_chunk;
                 }
             }
             BytesPerPixel::Six => {
                 let mut prev = [0; 6];
-                for chunk in current.chunks_exact_mut(6) {
+                for chunk in current.as_chunks_mut::<6>().0.iter_mut() {
                     let new_chunk = [
                         chunk[0].wrapping_add(prev[0]),
                         chunk[1].wrapping_add(prev[1]),
@@ -130,13 +128,13 @@ pub(crate) fn unfilter(
                         chunk[4].wrapping_add(prev[4]),
                         chunk[5].wrapping_add(prev[5]),
                     ];
-                    *TryInto::<&mut [u8; 6]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     prev = new_chunk;
                 }
             }
             BytesPerPixel::Eight => {
                 let mut prev = [0; 8];
-                for chunk in current.chunks_exact_mut(8) {
+                for chunk in current.as_chunks_mut::<8>().0.iter_mut() {
                     let new_chunk = [
                         chunk[0].wrapping_add(prev[0]),
                         chunk[1].wrapping_add(prev[1]),
@@ -147,7 +145,7 @@ pub(crate) fn unfilter(
                         chunk[6].wrapping_add(prev[6]),
                         chunk[7].wrapping_add(prev[7]),
                     ];
-                    *TryInto::<&mut [u8; 8]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     prev = new_chunk;
                 }
             }
@@ -166,43 +164,43 @@ pub(crate) fn unfilter(
             }
             BytesPerPixel::Two => {
                 let mut prev = [0; 2];
-                for chunk in current.chunks_exact_mut(2) {
+                for chunk in current.as_chunks_mut::<2>().0.iter_mut() {
                     let new_chunk = [
                         chunk[0].wrapping_add(prev[0] / 2),
                         chunk[1].wrapping_add(prev[1] / 2),
                     ];
-                    *TryInto::<&mut [u8; 2]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     prev = new_chunk;
                 }
             }
             BytesPerPixel::Three => {
                 let mut prev = [0; 3];
-                for chunk in current.chunks_exact_mut(3) {
+                for chunk in current.as_chunks_mut::<3>().0.iter_mut() {
                     let new_chunk = [
                         chunk[0].wrapping_add(prev[0] / 2),
                         chunk[1].wrapping_add(prev[1] / 2),
                         chunk[2].wrapping_add(prev[2] / 2),
                     ];
-                    *TryInto::<&mut [u8; 3]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     prev = new_chunk;
                 }
             }
             BytesPerPixel::Four => {
                 let mut prev = [0; 4];
-                for chunk in current.chunks_exact_mut(4) {
+                for chunk in current.as_chunks_mut::<4>().0.iter_mut() {
                     let new_chunk = [
                         chunk[0].wrapping_add(prev[0] / 2),
                         chunk[1].wrapping_add(prev[1] / 2),
                         chunk[2].wrapping_add(prev[2] / 2),
                         chunk[3].wrapping_add(prev[3] / 2),
                     ];
-                    *TryInto::<&mut [u8; 4]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     prev = new_chunk;
                 }
             }
             BytesPerPixel::Six => {
                 let mut prev = [0; 6];
-                for chunk in current.chunks_exact_mut(6) {
+                for chunk in current.as_chunks_mut::<6>().0.iter_mut() {
                     let new_chunk = [
                         chunk[0].wrapping_add(prev[0] / 2),
                         chunk[1].wrapping_add(prev[1] / 2),
@@ -211,13 +209,13 @@ pub(crate) fn unfilter(
                         chunk[4].wrapping_add(prev[4] / 2),
                         chunk[5].wrapping_add(prev[5] / 2),
                     ];
-                    *TryInto::<&mut [u8; 6]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     prev = new_chunk;
                 }
             }
             BytesPerPixel::Eight => {
                 let mut prev = [0; 8];
-                for chunk in current.chunks_exact_mut(8) {
+                for chunk in current.as_chunks_mut::<8>().0.iter_mut() {
                     let new_chunk = [
                         chunk[0].wrapping_add(prev[0] / 2),
                         chunk[1].wrapping_add(prev[1] / 2),
@@ -228,7 +226,7 @@ pub(crate) fn unfilter(
                         chunk[6].wrapping_add(prev[6] / 2),
                         chunk[7].wrapping_add(prev[7] / 2),
                     ];
-                    *TryInto::<&mut [u8; 8]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     prev = new_chunk;
                 }
             }
@@ -236,52 +234,77 @@ pub(crate) fn unfilter(
         Avg => match tbpp {
             BytesPerPixel::One => {
                 let mut lprev = [0; 1];
-                for (chunk, above) in current.chunks_exact_mut(1).zip(previous.chunks_exact(1)) {
+                for (chunk, above) in current
+                    .as_chunks_mut::<1>()
+                    .0
+                    .iter_mut()
+                    .zip(previous.as_chunks::<1>().0.iter())
+                {
                     let new_chunk =
                         [chunk[0].wrapping_add(((above[0] as u16 + lprev[0] as u16) / 2) as u8)];
-                    *TryInto::<&mut [u8; 1]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     lprev = new_chunk;
                 }
             }
             BytesPerPixel::Two => {
                 let mut lprev = [0; 2];
-                for (chunk, above) in current.chunks_exact_mut(2).zip(previous.chunks_exact(2)) {
+                for (chunk, above) in current
+                    .as_chunks_mut::<2>()
+                    .0
+                    .iter_mut()
+                    .zip(previous.as_chunks::<2>().0.iter())
+                {
                     let new_chunk = [
                         chunk[0].wrapping_add(((above[0] as u16 + lprev[0] as u16) / 2) as u8),
                         chunk[1].wrapping_add(((above[1] as u16 + lprev[1] as u16) / 2) as u8),
                     ];
-                    *TryInto::<&mut [u8; 2]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     lprev = new_chunk;
                 }
             }
             BytesPerPixel::Three => {
                 let mut lprev = [0; 3];
-                for (chunk, above) in current.chunks_exact_mut(3).zip(previous.chunks_exact(3)) {
+                for (chunk, above) in current
+                    .as_chunks_mut::<3>()
+                    .0
+                    .iter_mut()
+                    .zip(previous.as_chunks::<3>().0.iter())
+                {
                     let new_chunk = [
                         chunk[0].wrapping_add(((above[0] as u16 + lprev[0] as u16) / 2) as u8),
                         chunk[1].wrapping_add(((above[1] as u16 + lprev[1] as u16) / 2) as u8),
                         chunk[2].wrapping_add(((above[2] as u16 + lprev[2] as u16) / 2) as u8),
                     ];
-                    *TryInto::<&mut [u8; 3]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     lprev = new_chunk;
                 }
             }
             BytesPerPixel::Four => {
                 let mut lprev = [0; 4];
-                for (chunk, above) in current.chunks_exact_mut(4).zip(previous.chunks_exact(4)) {
+                for (chunk, above) in current
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(previous.as_chunks::<4>().0.iter())
+                {
                     let new_chunk = [
                         chunk[0].wrapping_add(((above[0] as u16 + lprev[0] as u16) / 2) as u8),
                         chunk[1].wrapping_add(((above[1] as u16 + lprev[1] as u16) / 2) as u8),
                         chunk[2].wrapping_add(((above[2] as u16 + lprev[2] as u16) / 2) as u8),
                         chunk[3].wrapping_add(((above[3] as u16 + lprev[3] as u16) / 2) as u8),
                     ];
-                    *TryInto::<&mut [u8; 4]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     lprev = new_chunk;
                 }
             }
             BytesPerPixel::Six => {
                 let mut lprev = [0; 6];
-                for (chunk, above) in current.chunks_exact_mut(6).zip(previous.chunks_exact(6)) {
+                for (chunk, above) in current
+                    .as_chunks_mut::<6>()
+                    .0
+                    .iter_mut()
+                    .zip(previous.as_chunks::<6>().0.iter())
+                {
                     let new_chunk = [
                         chunk[0].wrapping_add(((above[0] as u16 + lprev[0] as u16) / 2) as u8),
                         chunk[1].wrapping_add(((above[1] as u16 + lprev[1] as u16) / 2) as u8),
@@ -290,13 +313,18 @@ pub(crate) fn unfilter(
                         chunk[4].wrapping_add(((above[4] as u16 + lprev[4] as u16) / 2) as u8),
                         chunk[5].wrapping_add(((above[5] as u16 + lprev[5] as u16) / 2) as u8),
                     ];
-                    *TryInto::<&mut [u8; 6]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     lprev = new_chunk;
                 }
             }
             BytesPerPixel::Eight => {
                 let mut lprev = [0; 8];
-                for (chunk, above) in current.chunks_exact_mut(8).zip(previous.chunks_exact(8)) {
+                for (chunk, above) in current
+                    .as_chunks_mut::<8>()
+                    .0
+                    .iter_mut()
+                    .zip(previous.as_chunks::<8>().0.iter())
+                {
                     let new_chunk = [
                         chunk[0].wrapping_add(((above[0] as u16 + lprev[0] as u16) / 2) as u8),
                         chunk[1].wrapping_add(((above[1] as u16 + lprev[1] as u16) / 2) as u8),
@@ -307,7 +335,7 @@ pub(crate) fn unfilter(
                         chunk[6].wrapping_add(((above[6] as u16 + lprev[6] as u16) / 2) as u8),
                         chunk[7].wrapping_add(((above[7] as u16 + lprev[7] as u16) / 2) as u8),
                     ];
-                    *TryInto::<&mut [u8; 8]>::try_into(chunk).unwrap() = new_chunk;
+                    *chunk = new_chunk;
                     lprev = new_chunk;
                 }
             }

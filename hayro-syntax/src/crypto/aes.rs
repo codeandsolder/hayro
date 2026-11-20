@@ -432,9 +432,8 @@ impl<const KEY_SIZE: usize, const ROUNDS: usize> AESCipher<KEY_SIZE, ROUNDS> {
         let mut result = Vec::new();
         let mut prev_block = *iv;
 
-        for chunk in data.chunks_exact(16) {
-            let mut block = [0_u8; 16];
-            block.copy_from_slice(chunk);
+        for chunk in data.as_chunks::<16>().0.iter() {
+            let block = *chunk;
 
             let decrypted = self.decrypt_block(&block);
 

@@ -176,7 +176,7 @@ mod inner {
     impl Level {
         #[inline(always)]
         pub(crate) fn new() -> Self {
-            Level
+            Self
         }
     }
 
@@ -391,8 +391,8 @@ mod inner {
     impl<S: Simd> MulAssign<f32> for f32x8<S> {
         #[inline(always)]
         fn mul_assign(&mut self, rhs: f32) {
-            for i in 0..SIMD_WIDTH {
-                self.val[i] *= rhs;
+            for value in &mut self.val {
+                *value *= rhs;
             }
         }
     }
@@ -400,8 +400,8 @@ mod inner {
     impl<S: Simd> DivAssign<f32> for f32x8<S> {
         #[inline(always)]
         fn div_assign(&mut self, rhs: f32) {
-            for i in 0..SIMD_WIDTH {
-                self.val[i] /= rhs;
+            for value in &mut self.val {
+                *value /= rhs;
             }
         }
     }
