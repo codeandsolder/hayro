@@ -62,9 +62,9 @@ pub(super) fn unfilter(tbpp: BytesPerPixel, previous: &[u8], current: &mut [u8])
                 .zip(previous.as_chunks::<1>().0.iter())
             {
                 let new_chunk = [chunk[0].wrapping_add(filter_paeth(a_bpp[0], b_bpp[0], c_bpp[0]))];
-                *TryInto::<&mut [u8; 1]>::try_into(chunk).unwrap() = new_chunk;
+                *chunk = new_chunk;
                 a_bpp = new_chunk;
-                c_bpp = b_bpp.try_into().unwrap();
+                c_bpp = *b_bpp;
             }
         }
         BytesPerPixel::Two => {
@@ -80,9 +80,9 @@ pub(super) fn unfilter(tbpp: BytesPerPixel, previous: &[u8], current: &mut [u8])
                     chunk[0].wrapping_add(filter_paeth(a_bpp[0], b_bpp[0], c_bpp[0])),
                     chunk[1].wrapping_add(filter_paeth(a_bpp[1], b_bpp[1], c_bpp[1])),
                 ];
-                *TryInto::<&mut [u8; 2]>::try_into(chunk).unwrap() = new_chunk;
+                *chunk = new_chunk;
                 a_bpp = new_chunk;
-                c_bpp = b_bpp.try_into().unwrap();
+                c_bpp = *b_bpp;
             }
         }
         BytesPerPixel::Three => {
@@ -145,9 +145,9 @@ pub(super) fn unfilter(tbpp: BytesPerPixel, previous: &[u8], current: &mut [u8])
                     chunk[4].wrapping_add(filter_paeth(a_bpp[4], b_bpp[4], c_bpp[4])),
                     chunk[5].wrapping_add(filter_paeth(a_bpp[5], b_bpp[5], c_bpp[5])),
                 ];
-                *TryInto::<&mut [u8; 6]>::try_into(chunk).unwrap() = new_chunk;
+                *chunk = new_chunk;
                 a_bpp = new_chunk;
-                c_bpp = b_bpp.try_into().unwrap();
+                c_bpp = *b_bpp;
             }
         }
         BytesPerPixel::Eight => {
@@ -169,9 +169,9 @@ pub(super) fn unfilter(tbpp: BytesPerPixel, previous: &[u8], current: &mut [u8])
                     chunk[6].wrapping_add(filter_paeth(a_bpp[6], b_bpp[6], c_bpp[6])),
                     chunk[7].wrapping_add(filter_paeth(a_bpp[7], b_bpp[7], c_bpp[7])),
                 ];
-                *TryInto::<&mut [u8; 8]>::try_into(chunk).unwrap() = new_chunk;
+                *chunk = new_chunk;
                 a_bpp = new_chunk;
-                c_bpp = b_bpp.try_into().unwrap();
+                c_bpp = *b_bpp;
             }
         }
     }
