@@ -146,7 +146,7 @@ impl<'a> SoftMask<'a> {
         );
         self.0
             .group
-            .draw(&self.0.parent_resources, &mut ctx, device);
+            .draw(&self.0.parent_resources, &mut ctx, device, None);
     }
 
     /// Return the underlying mask type.

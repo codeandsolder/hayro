@@ -1,13 +1,15 @@
 use super::xobject_oc;
 use crate::context::Context;
 use crate::device::Device;
-use crate::{ClipPath, FillRule, interpret};
+use crate::interpret::interpret_with_page_path;
+use crate::{ClipPath, FillRule};
 use hayro_syntax::content::TypedIter;
 use hayro_syntax::object::Dict;
 use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::*;
 use hayro_syntax::page::Resources;
 use kurbo::{Affine, Rect, Shape};
+use smallvec::SmallVec;
 use std::borrow::Cow;
 
 pub(crate) struct FormXObject<'a> {
@@ -58,6 +60,7 @@ impl<'a> FormXObject<'a> {
         resources: &Resources<'a>,
         context: &mut Context<'a>,
         device: &mut impl Device<'a>,
+        page_path: Option<&mut SmallVec<[u32; 8]>>,
     ) {
         if !context.ocg_state.is_visible() {
             return;
@@ -108,11 +111,12 @@ impl<'a> FormXObject<'a> {
             fill: FillRule::NonZero,
         });
 
-        interpret(
+        interpret_with_page_path(
             iter,
             self.resources.as_ref().unwrap_or(resources),
             context,
             device,
+            page_path,
         );
 
         device.pop_clip();
