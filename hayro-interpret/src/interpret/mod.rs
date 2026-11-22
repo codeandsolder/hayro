@@ -373,6 +373,7 @@ pub fn interpret<'a>(
                 } else {
                     context
                         .get_color_space(resources, c.0)
+                        .map(|(space, _)| space)
                         .unwrap_or(ColorSpace::device_gray())
                 };
 
@@ -388,6 +389,7 @@ pub fn interpret<'a>(
                 } else {
                     context
                         .get_color_space(resources, c.0)
+                        .map(|(space, _)| space)
                         .unwrap_or(ColorSpace::device_gray())
                 };
 
