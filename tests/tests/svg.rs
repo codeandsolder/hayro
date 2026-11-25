@@ -13,7 +13,7 @@ pub(crate) fn tests() -> Vec<Test> {
             files.extend(FALLBACK_FONTS.map(String::from));
 
             Test::new(format!("svg::{}", entry.name), files, move || {
-                let pdf = match try_load_pdf(&entry.file, &entry.password) {
+                let pdf = match try_load_pdf(&entry.file, entry.pdf_options()) {
                     Ok(pdf) => pdf,
                     Err(err) => return Outcome::Failed(err),
                 };

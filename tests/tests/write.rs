@@ -214,7 +214,7 @@ pub(crate) fn tests() -> Vec<Test> {
         files.extend(FALLBACK_FONTS.map(String::from));
 
         Test::new(format!("write::{name}"), files, move || {
-            let hayro_pdf = match try_load_pdf(file, "") {
+            let hayro_pdf = match try_load_pdf(file, Default::default()) {
                 Ok(pdf) => pdf,
                 Err(err) => return Outcome::Failed(err),
             };
