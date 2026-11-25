@@ -14,7 +14,7 @@ use crate::{
 };
 use hayro_syntax::content::ops::Transform;
 use hayro_syntax::object::Dict;
-use hayro_syntax::object::Name;
+use hayro_syntax::object::{Name, Object};
 use hayro_syntax::page::Resources;
 use hayro_syntax::xref::XRef;
 use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape};
@@ -340,15 +340,17 @@ impl<'a> Context<'a> {
 
     pub(crate) fn get_color_space(
         &mut self,
-        resources: &Resources<'_>,
+        resources: &Resources<'a>,
         name: &Name<'_>,
-    ) -> Option<ColorSpace> {
+    ) -> Option<(ColorSpace, Object<'a>)> {
         let cs_object = resources.get_color_space(name)?;
-        self.interpreter_cache
+        let color_space = self
+            .interpreter_cache
             .object_cache
             .get_or_insert_with(cs_object.cache_key(), || {
                 ColorSpace::new(cs_object.clone(), &self.interpreter_cache.object_cache)
-            })
+            })?;
+        Some((color_space, cs_object))
     }
 
     pub(crate) fn num_states(&self) -> usize {
