@@ -10,6 +10,7 @@ use crate::{BlendMode, CacheKey, Image, ImageDrawProps, RasterImage, StencilImag
 use hayro_syntax::object::dict::keys::*;
 use hayro_syntax::object::{Name, Object, Stream};
 use kurbo::Affine;
+use smallvec::SmallVec;
 
 #[derive(Clone)]
 pub(crate) struct ImageXObject<'a> {
@@ -130,7 +131,12 @@ impl<'a> ImageXObject<'a> {
         })
     }
 
-    pub(crate) fn draw<'b>(&self, context: &mut Context<'b>, device: &mut impl Device<'b>) {
+    pub(crate) fn draw<'b>(
+        &self,
+        context: &mut Context<'b>,
+        device: &mut impl Device<'b>,
+        page_path: Option<&SmallVec<[u32; 8]>>,
+    ) {
         if !context.ocg_state.is_visible() {
             return;
         }
@@ -189,6 +195,7 @@ impl<'a> ImageXObject<'a> {
         device.draw_image(
             image,
             ImageDrawProps {
+                page_xobject_path: page_path.cloned(),
                 transform,
                 soft_mask: None,
                 blend_mode: BlendMode::default(),

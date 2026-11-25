@@ -303,6 +303,8 @@ pub struct DrawProps<'a> {
 /// Properties for an image drawing operation.
 #[derive(Clone)]
 pub struct ImageDrawProps<'a> {
+    /// Zero-based nested Do ordinals from the page content, or None outside a page XObject invocation.
+    pub page_xobject_path: Option<SmallVec<[u32; 8]>>,
     /// The transform.
     pub transform: Affine,
     /// The soft mask.
