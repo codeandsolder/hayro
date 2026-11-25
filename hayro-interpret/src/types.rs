@@ -92,7 +92,7 @@ impl RasterImage<'_> {
     /// Identify the decoding inputs for an indirect image in this document.
     ///
     /// Reuse only within the same parsed PDF and for the same target dimension
-    /// supplied to [Self::with_rgba]. Inline images do not have an indirect
+    /// supplied to [`Self::with_rgba`]. Inline images do not have an indirect
     /// object identity and return None. The color definition is the object
     /// actually resolved by the interpreter, not a resource name or its hash.
     pub fn decode_context(
@@ -303,7 +303,7 @@ pub struct DrawProps<'a> {
 /// Properties for an image drawing operation.
 #[derive(Clone)]
 pub struct ImageDrawProps<'a> {
-    /// Zero-based nested Do ordinals from the page content, or None outside a page XObject invocation.
+    /// Zero-based nested `Do` ordinals from the page content, or `None` outside a page `XObject` invocation.
     pub page_xobject_path: Option<SmallVec<[u32; 8]>>,
     /// The transform.
     pub transform: Affine,
