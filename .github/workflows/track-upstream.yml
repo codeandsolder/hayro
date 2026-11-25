@@ -18,4 +18,4 @@ jobs:
       target-branch: main
       strategy: merge
       validation-script: .github/scripts/validate-upstream.sh
-      rust-toolchain: repository
+      rust-toolchain: nightly-2026-11-22

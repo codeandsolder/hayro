@@ -16,7 +16,7 @@ pub(crate) fn decode_into<B: ByteBuf>(data: &[u8]) -> Option<B> {
 fn decode_with_limit<B: ByteBuf>(data: &[u8], limit: Limit<usize>) -> Option<B> {
     let mut has_whitespace = false;
     let mut end = data.len();
-    let mut digits = 0usize;
+    let mut digits = 0_usize;
 
     for (idx, byte) in data.iter().enumerate() {
         let whitespace = is_white_space_character(*byte);
