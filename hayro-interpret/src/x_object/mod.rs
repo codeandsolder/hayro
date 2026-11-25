@@ -13,10 +13,11 @@ use crate::context::Context;
 use crate::device::Device;
 use crate::interpret::state::ActiveTransferFunction;
 use hayro_syntax::object::Dict;
-use hayro_syntax::object::Name;
 use hayro_syntax::object::Stream;
 use hayro_syntax::object::dict::keys::*;
+use hayro_syntax::object::{Name, Object};
 use hayro_syntax::page::Resources;
+use smallvec::SmallVec;
 use std::ops::Deref;
 
 pub(crate) enum XObject<'a> {
@@ -27,7 +28,7 @@ pub(crate) enum XObject<'a> {
 impl<'a> XObject<'a> {
     pub(crate) fn new(
         stream: &Stream<'a>,
-        resolve_cs: impl FnOnce(&Name<'_>) -> Option<ColorSpace>,
+        resolve_cs: impl FnOnce(&Name<'_>) -> Option<(ColorSpace, Object<'a>)>,
         warning_sink: &WarningSinkFn,
         cache: &Cache,
         transfer_function: Option<ActiveTransferFunction>,
@@ -51,10 +52,11 @@ impl<'a> XObject<'a> {
         resources: &Resources<'a>,
         context: &mut Context<'a>,
         device: &mut impl Device<'a>,
+        page_path: Option<&mut SmallVec<[u32; 8]>>,
     ) {
         match self {
-            Self::FormXObject(form) => form.draw(resources, context, device),
-            Self::ImageXObject(image) => image.draw(context, device),
+            Self::FormXObject(form) => form.draw(resources, context, device, page_path),
+            Self::ImageXObject(image) => image.draw(context, device, page_path.as_deref()),
         }
     }
 }

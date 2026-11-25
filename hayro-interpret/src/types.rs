@@ -1,10 +1,11 @@
 use crate::CacheKey;
 use crate::color::Color;
+use crate::interpret::state::ActiveTransferFunction;
 use crate::pattern::Pattern;
 use crate::util::hash128;
 use crate::x_object::ImageXObject;
 use crate::x_object::soft_mask::SoftMask;
-use hayro_syntax::object::Stream;
+use hayro_syntax::object::{Object, ObjectIdentifier, Stream};
 use kurbo::{Affine, BezPath, Cap, Join};
 use smallvec::{SmallVec, smallvec};
 
@@ -64,10 +65,62 @@ impl CacheKey for StencilImage<'_, '_> {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum RasterColorDefinition {
+    Name(Box<[u8]>),
+    Array(Box<[u8]>),
+}
+
+/// An exact, document-local identity for the inputs to raster decoding.
+///
+/// Equality is sufficient for reusing decoded pixels within the same parsed
+/// PDF, but unequal identities may also decode to identical pixels. Unlike
+/// a stream cache key, this includes resolved color space and transfer state.
+/// Does not describe how the raster is composited or positioned on the page.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RasterDecodeContext {
+    source: ObjectIdentifier,
+    color: Option<RasterColorDefinition>,
+    transfer: Vec<[u8; 256]>,
+    target_dimension: Option<(u32, u32)>,
+}
+
 /// A raster image.
 pub struct RasterImage<'a>(pub(crate) ImageXObject<'a>);
 
 impl RasterImage<'_> {
+    /// Identify the decoding inputs for an indirect image in this document.
+    ///
+    /// Reuse only within the same parsed PDF and for the same target dimension
+    /// supplied to [`Self::with_rgba`]. Inline images do not have an indirect
+    /// object identity and return None. The color definition is the object
+    /// actually resolved by the interpreter, not a resource name or its hash.
+    pub fn decode_context(
+        &self,
+        target_dimension: Option<(u32, u32)>,
+    ) -> Option<RasterDecodeContext> {
+        let source = self.0.stream().dict().obj_id()?;
+        let color = match &self.0.color_space_definition {
+            Some(Object::Name(name)) => Some(RasterColorDefinition::Name(name.as_ref().into())),
+            Some(Object::Array(array)) => Some(RasterColorDefinition::Array(array.data().into())),
+            None if self.0.color_space.is_none() => None,
+            _ => return None,
+        };
+        // Keep the distinction between no transfer, one table and four
+        // tables: the decoder's luma fast path also depends on this shape.
+        let transfer = match &self.0.transfer_function {
+            None => Vec::new(),
+            Some(ActiveTransferFunction::Single(f)) => vec![*f.samples()],
+            Some(ActiveTransferFunction::Four(fs)) => fs.iter().map(|f| *f.samples()).collect(),
+        };
+        Some(RasterDecodeContext {
+            source,
+            color,
+            transfer,
+            target_dimension,
+        })
+    }
+
     /// Run `func` with the decoded RGB and alpha data, optionally hinting at the desired resolution.
     pub fn with_rgba(
         &self,
@@ -250,6 +303,8 @@ pub struct DrawProps<'a> {
 /// Properties for an image drawing operation.
 #[derive(Clone)]
 pub struct ImageDrawProps<'a> {
+    /// Zero-based nested `Do` ordinals from the page content, or `None` outside a page `XObject` invocation.
+    pub page_xobject_path: Option<SmallVec<[u32; 8]>>,
     /// The transform.
     pub transform: Affine,
     /// The soft mask.

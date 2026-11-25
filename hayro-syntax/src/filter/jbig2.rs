@@ -1,3 +1,4 @@
+use crate::Limits;
 use crate::object::Dict;
 use crate::object::Stream;
 use crate::object::dict::keys::JBIG2_GLOBALS;
@@ -9,6 +10,7 @@ pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
+    limits: Limits,
 ) -> Option<FilterResult<'static>> {
     let globals = params
         .get::<Stream<'_>>(JBIG2_GLOBALS)
@@ -20,6 +22,9 @@ pub(crate) fn decode(
         .transpose()
         .ok()?;
     let page = hayro_jbig2::Page::new_embedded(data, globals.as_ref(), &settings).ok()?;
+    if !limits.permits_image(page.width(), page.height()) {
+        return None;
+    }
     let bitmap = page.decode().ok()?;
 
     // Expand to 8 bpc unless indexed, for easier RGBA8 conversion.

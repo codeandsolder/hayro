@@ -10,12 +10,14 @@ use crate::{BlendMode, CacheKey, Image, ImageDrawProps, RasterImage, StencilImag
 use hayro_syntax::object::dict::keys::*;
 use hayro_syntax::object::{Name, Object, Stream};
 use kurbo::Affine;
+use smallvec::SmallVec;
 
 #[derive(Clone)]
 pub(crate) struct ImageXObject<'a> {
     width: u32,
     height: u32,
     pub(crate) color_space: Option<ColorSpace>,
+    pub(crate) color_space_definition: Option<Object<'a>>,
     pub(crate) cache: Cache,
     pub(crate) interpolate: bool,
     pub(crate) kind: ImageKind,
@@ -40,7 +42,7 @@ impl ImageKind {
 impl<'a> ImageXObject<'a> {
     pub(crate) fn new(
         stream: &Stream<'a>,
-        resolve_cs: impl FnOnce(&Name<'_>) -> Option<ColorSpace>,
+        resolve_cs: impl FnOnce(&Name<'_>) -> Option<(ColorSpace, Object<'a>)>,
         warning_sink: &WarningSinkFn,
         cache: &Cache,
         transfer_function: Option<ActiveTransferFunction>,
@@ -65,7 +67,7 @@ impl<'a> ImageXObject<'a> {
 
     fn new_inner(
         stream: &Stream<'a>,
-        resolve_cs: impl FnOnce(&Name<'_>) -> Option<ColorSpace>,
+        resolve_cs: impl FnOnce(&Name<'_>) -> Option<(ColorSpace, Object<'a>)>,
         warning_sink: &WarningSinkFn,
         cache: &Cache,
         mut kind: ImageKind,
@@ -82,22 +84,25 @@ impl<'a> ImageXObject<'a> {
             kind = ImageKind::StencilMask;
         }
 
-        let image_cs = if kind.is_mask() {
-            Some(ColorSpace::device_gray())
+        let (image_cs, color_space_definition) = if kind.is_mask() {
+            (Some(ColorSpace::device_gray()), None)
         } else {
             let cs_obj = dict
                 .get::<Object<'_>>(CS)
                 .or_else(|| dict.get::<Object<'_>>(COLORSPACE));
 
-            cs_obj
-                .clone()
-                .and_then(|c| ColorSpace::new(c, cache))
-                // Against the spec, some producers name color spaces in image XObjects (#1311).
-                .or_else(|| {
-                    cs_obj
-                        .and_then(|c| c.into_name())
-                        .and_then(|n| resolve_cs(&n))
-                })
+            let resolved = cs_obj.and_then(|definition| {
+                if let Some(space) = ColorSpace::new(definition.clone(), cache) {
+                    Some((space, definition))
+                } else {
+                    // Against the spec, some producers name color spaces in image XObjects (#1311).
+                    definition.into_name().and_then(|name| resolve_cs(&name))
+                }
+            });
+            match resolved {
+                Some((space, definition)) => (Some(space), Some(definition)),
+                None => (None, None),
+            }
         };
 
         let interpolate = dict
@@ -117,6 +122,7 @@ impl<'a> ImageXObject<'a> {
             cache: cache.clone(),
             height,
             color_space: image_cs,
+            color_space_definition,
             warning_sink: warning_sink.clone(),
             transfer_function,
             interpolate,
@@ -125,7 +131,12 @@ impl<'a> ImageXObject<'a> {
         })
     }
 
-    pub(crate) fn draw<'b>(&self, context: &mut Context<'b>, device: &mut impl Device<'b>) {
+    pub(crate) fn draw<'b>(
+        &self,
+        context: &mut Context<'b>,
+        device: &mut impl Device<'b>,
+        page_path: Option<&SmallVec<[u32; 8]>>,
+    ) {
         if !context.ocg_state.is_visible() {
             return;
         }
@@ -184,6 +195,7 @@ impl<'a> ImageXObject<'a> {
         device.draw_image(
             image,
             ImageDrawProps {
+                page_xobject_path: page_path.cloned(),
                 transform,
                 soft_mask: None,
                 blend_mode: BlendMode::default(),

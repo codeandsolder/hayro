@@ -80,6 +80,7 @@ pub(crate) mod sync;
 
 mod data;
 pub(crate) mod filter;
+mod limits;
 pub(crate) mod pdf;
 pub(crate) mod trivia;
 pub(crate) mod util;
@@ -102,4 +103,5 @@ pub mod reader;
 
 pub use data::PdfData;
 pub use filter::*;
+pub use limits::{Limit, Limits};
 pub use pdf::*;

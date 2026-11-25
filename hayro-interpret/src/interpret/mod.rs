@@ -20,7 +20,7 @@ use hayro_syntax::object::{Array, Dict, Name, Object, Rect, Stream, dict_or_stre
 use hayro_syntax::page::{Page, Resources};
 use kurbo::{Affine, Point, Shape};
 use rustc_hash::FxHashMap;
-use smallvec::smallvec;
+use smallvec::{SmallVec, smallvec};
 use std::sync::Arc;
 
 pub(crate) mod path;
@@ -103,7 +103,13 @@ pub fn interpret_page<'a>(
     let render_content = context.settings.render_content;
 
     if render_content.contains(RenderContent::PAGE) {
-        interpret(page.typed_operations(), resources, context, device);
+        interpret_with_page_path(
+            page.typed_operations(),
+            resources,
+            context,
+            device,
+            Some(&mut SmallVec::new()),
+        );
     }
 
     if render_content.contains(RenderContent::ANNOTATIONS)
@@ -158,7 +164,7 @@ fn interpret_annotation<'a>(
         context.pre_concat_affine(affine);
         context.push_root_transform();
 
-        apx.draw(resources, context, device);
+        apx.draw(resources, context, device, None);
         context.pop_root_transform();
         context.restore_state(device);
     } else if annot.get::<Dict<'_>>(AP).is_some() {
@@ -179,11 +185,22 @@ fn appearance_stream<'a>(annot: &Dict<'a>) -> Option<Stream<'a>> {
 
 /// Interpret the instructions from `ops` and render them into the device.
 pub fn interpret<'a>(
-    mut ops: TypedIter<'_>,
+    ops: TypedIter<'_>,
     resources: &Resources<'a>,
     context: &mut Context<'a>,
     device: &mut impl Device<'a>,
 ) {
+    interpret_with_page_path(ops, resources, context, device, None);
+}
+
+pub(crate) fn interpret_with_page_path<'a>(
+    mut ops: TypedIter<'_>,
+    resources: &Resources<'a>,
+    context: &mut Context<'a>,
+    device: &mut impl Device<'a>,
+    mut page_path: Option<&mut SmallVec<[u32; 8]>>,
+) {
+    let mut next_do = 0_u64;
     let num_states = context.num_states();
     let mut font_dict_cache = FxHashMap::<Name<'a>, Dict<'a>>::default();
 
@@ -373,6 +390,7 @@ pub fn interpret<'a>(
                 } else {
                     context
                         .get_color_space(resources, c.0)
+                        .map(|(space, _)| space)
                         .unwrap_or(ColorSpace::device_gray())
                 };
 
@@ -388,6 +406,7 @@ pub fn interpret<'a>(
                 } else {
                     context
                         .get_color_space(resources, c.0)
+                        .map(|(space, _)| space)
                         .unwrap_or(ColorSpace::device_gray())
                 };
 
@@ -580,6 +599,8 @@ pub fn interpret<'a>(
             }
             TypedInstruction::ShapeGlyph(_) => {}
             TypedInstruction::XObject(x) => {
+                let ordinal = u32::try_from(next_do).ok();
+                next_do += 1;
                 let cache = context.interpreter_cache.object_cache.clone();
                 let warning_sink = context.settings.warning_sink.clone();
                 let transfer_function = context.compositing().transfer_function.clone();
@@ -592,8 +613,17 @@ pub fn interpret<'a>(
                         transfer_function.clone(),
                     )
                 }) {
-                    x_object.draw(resources, context, device);
+                    if let (Some(path), Some(ordinal)) = (page_path.as_deref_mut(), ordinal) {
+                        path.push(ordinal);
+                        x_object.draw(resources, context, device, Some(path));
+                        path.pop();
+                    } else {
+                        x_object.draw(resources, context, device, None);
+                    }
                 }
+            }
+            TypedInstruction::Fallback(operator) if &**operator == b"Do" => {
+                next_do += 1;
             }
             TypedInstruction::InlineImage(i) => {
                 let warning_sink = context.settings.warning_sink.clone();
@@ -606,7 +636,7 @@ pub fn interpret<'a>(
                     &cache,
                     transfer_function,
                 ) {
-                    x_object.draw(context, device);
+                    x_object.draw(context, device, None);
                 }
             }
             TypedInstruction::TextRise(t) => {

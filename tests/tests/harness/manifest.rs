@@ -1,4 +1,5 @@
 use crate::WORKSPACE_PATH;
+use hayro_syntax::{Limit, PdfOptions};
 use serde_json::{Map, Value};
 use std::ops::RangeInclusive;
 use std::sync::LazyLock;
@@ -44,9 +45,19 @@ pub(crate) struct Entry {
     pub(crate) svg: bool,
     pub(crate) max_diff_pixels: u32,
     pub(crate) aliasing_threshold: Option<u8>,
+    max_decoded_stream_size: Option<usize>,
 }
 
 impl Entry {
+    pub(crate) fn pdf_options(&self) -> PdfOptions<'_> {
+        let mut options = PdfOptions::default();
+        options.password = &self.password;
+        if let Some(max) = self.max_decoded_stream_size {
+            options.limits.max_decoded_stream_size = Limit::AtMost(max);
+        }
+        options
+    }
+
     fn parse(value: &Value, kind: &str, downloaded_by_default: bool) -> Self {
         let empty = Map::new();
         let (id, fields) = match value {
@@ -98,6 +109,10 @@ impl Entry {
                 .get("max_diff_pixels")
                 .and_then(Value::as_u64)
                 .map_or(0, |pixels| pixels as u32),
+            max_decoded_stream_size: fields.get("max_decoded_stream_size").map(|size| {
+                usize::try_from(size.as_u64().expect("invalid decoded stream size"))
+                    .expect("decoded stream size does not fit usize")
+            }),
             aliasing_threshold: fields
                 .get("aliasing_threshold")
                 .and_then(Value::as_u64)

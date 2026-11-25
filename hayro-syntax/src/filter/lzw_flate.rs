@@ -1,18 +1,37 @@
 pub(crate) mod flate {
+    use crate::Limit;
     use crate::filter::predictor;
     use crate::object::Dict;
     use alloc::vec::Vec;
 
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>) -> Option<Vec<u8>> {
+    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: Limit<usize>) -> Option<Vec<u8>> {
         let data = zlib_body(data).unwrap_or(data);
         // Broken encoders can refer to data before the start, which should read as zeros.
-        let decoded = inflate(data, false)
-            .or_else(|_| inflate(data, true))
-            .unwrap_or_else(|partial| partial);
+        let decoded = match inflate(data, false, limit) {
+            Ok(decoded) => decoded,
+            Err(InflateError::Limit) => return None,
+            Err(InflateError::Partial(_)) => match inflate(data, true, limit) {
+                Ok(decoded) | Err(InflateError::Partial(decoded)) => decoded,
+                Err(InflateError::Limit) => return None,
+            },
+        };
         predictor::apply(decoded, params)
     }
 
     const WINDOW_SIZE: usize = 32 * 1024;
+
+    enum InflateError {
+        Limit,
+        Partial(Vec<u8>),
+    }
+
+    // One extra byte distinguishes a stream at the limit from an overflowing one.
+    fn grow_output(out: &mut Vec<u8>, limit: Limit<usize>, prefix: usize) {
+        let max = limit
+            .bound()
+            .map_or(usize::MAX, |n| n.saturating_add(1).saturating_add(prefix));
+        out.resize(out.len().saturating_mul(2).max(WINDOW_SIZE).min(max), 0);
+    }
 
     fn zlib_body(data: &[u8]) -> Option<&[u8]> {
         let [cmf, flg, body @ ..] = data else {
@@ -26,7 +45,11 @@ pub(crate) mod flate {
     }
 
     #[cfg(feature = "unsafe")]
-    fn inflate(mut data: &[u8], zero_window: bool) -> Result<Vec<u8>, Vec<u8>> {
+    fn inflate(
+        mut data: &[u8],
+        zero_window: bool,
+        limit: Limit<usize>,
+    ) -> Result<Vec<u8>, InflateError> {
         use zlib_rs::{Inflate, InflateFlush, Status};
 
         static ZEROS: [u8; WINDOW_SIZE] = [0; WINDOW_SIZE];
@@ -39,13 +62,16 @@ pub(crate) mod flate {
         let mut written = 0;
 
         loop {
-            out.resize((out.len() * 2).max(WINDOW_SIZE), 0);
+            grow_output(&mut out, limit, 0);
 
             let (total_in, total_out) = (inflate.total_in(), inflate.total_out());
             let result = inflate.decompress(data, &mut out[written..], InflateFlush::Finish);
             let consumed = (inflate.total_in() - total_in) as usize;
             let produced = (inflate.total_out() - total_out) as usize;
             written += produced;
+            if !limit.permits(written) {
+                return Err(InflateError::Limit);
+            }
             data = data.get(consumed..).unwrap_or_default();
 
             match result {
@@ -56,14 +82,18 @@ pub(crate) mod flate {
                 }
                 Err(_) => {
                     out.truncate(written);
-                    return Err(out);
+                    return Err(InflateError::Partial(out));
                 }
             }
         }
     }
 
     #[cfg(not(feature = "unsafe"))]
-    fn inflate(mut data: &[u8], zero_window: bool) -> Result<Vec<u8>, Vec<u8>> {
+    fn inflate(
+        mut data: &[u8],
+        zero_window: bool,
+        limit: Limit<usize>,
+    ) -> Result<Vec<u8>, InflateError> {
         use alloc::boxed::Box;
         use alloc::vec;
         use miniz_oxide::inflate::TINFLStatus;
@@ -76,7 +106,7 @@ pub(crate) mod flate {
         let mut written = start;
 
         loop {
-            out.resize((out.len() * 2).max(WINDOW_SIZE), 0);
+            grow_output(&mut out, limit, start);
 
             let (status, consumed, produced) = decompress(
                 &mut decompressor,
@@ -86,6 +116,9 @@ pub(crate) mod flate {
                 TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF,
             );
             written += produced;
+            if !limit.permits(written - start) {
+                return Err(InflateError::Limit);
+            }
             data = data.get(consumed..).unwrap_or_default();
 
             if status != TINFLStatus::HasMoreOutput {
@@ -94,7 +127,7 @@ pub(crate) mod flate {
 
                 return match status {
                     TINFLStatus::Done | TINFLStatus::FailedCannotMakeProgress => Ok(out),
-                    _ => Err(out),
+                    _ => Err(InflateError::Partial(out)),
                 };
             }
         }
@@ -102,6 +135,7 @@ pub(crate) mod flate {
 }
 
 pub(crate) mod lzw {
+    use crate::Limit;
     use crate::bit_reader::BitReader;
     use crate::filter::predictor;
     use crate::object::Dict;
@@ -109,12 +143,12 @@ pub(crate) mod lzw {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    pub(crate) fn decode(data: &[u8], params: &Dict<'_>) -> Option<Vec<u8>> {
+    pub(crate) fn decode(data: &[u8], params: &Dict<'_>, limit: Limit<usize>) -> Option<Vec<u8>> {
         let early_change = params
             .get::<u8>(EARLY_CHANGE)
             .map(|e| e != 0)
             .unwrap_or(true);
-        let decoded = decode_impl(data, early_change)?;
+        let decoded = decode_impl(data, early_change, limit)?;
 
         predictor::apply(decoded, params)
     }
@@ -124,7 +158,7 @@ pub(crate) mod lzw {
     const MAX_ENTRIES: usize = 4096;
     const INITIAL_SIZE: u16 = 258;
 
-    fn decode_impl(data: &[u8], early_change: bool) -> Option<Vec<u8>> {
+    fn decode_impl(data: &[u8], early_change: bool, limit: Limit<usize>) -> Option<Vec<u8>> {
         let mut table = Table::new(early_change);
         let mut bit_size = table.code_length();
         let mut reader = BitReader::new(data);
@@ -154,6 +188,9 @@ pub(crate) mod lzw {
                     if new < table.size() {
                         let entry = table.get(new)?;
                         let first_byte = entry[0];
+                        if !limit.permits(decoded.len().checked_add(entry.len())?) {
+                            return None;
+                        }
                         decoded.extend_from_slice(entry);
 
                         if let Some(prev_code) = prev {
@@ -165,6 +202,9 @@ pub(crate) mod lzw {
                         let first_byte = prev_entry[0];
 
                         let new_entry = table.register(prev_code, first_byte)?;
+                        if !limit.permits(decoded.len().checked_add(new_entry.len())?) {
+                            return None;
+                        }
                         decoded.extend_from_slice(new_entry);
                     } else {
                         return None;
@@ -250,13 +290,35 @@ pub(crate) mod lzw {
 mod tests {
     use crate::filter::lzw_flate::{flate, lzw};
     use crate::object::Dict;
+    use crate::Limit;
 
     #[test]
     fn decode_lzw() {
         let input = [0x80, 0x0B, 0x60, 0x50, 0x22, 0x0C, 0x0C, 0x85, 0x01];
-        let decoded = lzw::decode(&input, &Dict::default()).unwrap();
+        let decoded = lzw::decode(&input, &Dict::default(), crate::Limits::DEFAULT.max_decoded_stream_size).unwrap();
 
         assert_eq!(decoded, vec![45, 45, 45, 45, 45, 65, 45, 45, 45, 66]);
+    }
+
+    #[test]
+    fn rejects_flate_expansion_at_configured_limit() {
+        let input = miniz_oxide::deflate::compress_to_vec_zlib(&vec![0; 128 * 1024], 6);
+        assert!(flate::decode(&input, &Dict::default(), Limit::AtMost(64 * 1024)).is_none());
+        assert_eq!(
+            flate::decode(&input, &Dict::default(), Limit::AtMost(128 * 1024)).map(|d| d.len()),
+            Some(128 * 1024),
+        );
+        assert_eq!(
+            flate::decode(&input, &Dict::default(), Limit::Unlimited).map(|d| d.len()),
+            Some(128 * 1024),
+        );
+    }
+
+    #[test]
+    fn lzw_expansion_limit() {
+        let input = [0x80, 0x0B, 0x60, 0x50, 0x22, 0x0C, 0x0C, 0x85, 0x01];
+        assert!(lzw::decode(&input, &Dict::default(), Limit::AtMost(9)).is_none());
+        assert_eq!(lzw::decode(&input, &Dict::default(), Limit::AtMost(10)).unwrap().len(), 10);
     }
 
     #[test]
@@ -265,7 +327,7 @@ mod tests {
             0x78, 0x9c, 0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x7, 0x0, 0x5, 0x8c, 0x1, 0xf5,
         ];
 
-        let decoded = flate::decode(&input, &Dict::default()).unwrap();
+        let decoded = flate::decode(&input, &Dict::default(), crate::Limits::DEFAULT.max_decoded_stream_size).unwrap();
         assert_eq!(decoded, b"Hello");
     }
 
@@ -273,7 +335,7 @@ mod tests {
     fn decode_flate() {
         let input = [0xf3, 0x48, 0xcd, 0xc9, 0xc9, 0x7, 0x0];
 
-        let decoded = flate::decode(&input, &Dict::default()).unwrap();
+        let decoded = flate::decode(&input, &Dict::default(), crate::Limits::DEFAULT.max_decoded_stream_size).unwrap();
         assert_eq!(decoded, b"Hello");
     }
 }

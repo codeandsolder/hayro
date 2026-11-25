@@ -11,7 +11,7 @@ use hayro::vello_cpu::Pixels;
 use hayro::vello_cpu::peniko::ImageAlphaType;
 use hayro_svg::SvgRenderSettings;
 use hayro_syntax::Pdf;
-use hayro_syntax::{DecryptionError, LoadPdfError};
+use hayro_syntax::{DecryptionError, LoadPdfError, PdfOptions};
 use image::buffer::ConvertBuffer;
 use image::{RgbImage, RgbaImage};
 use resvg::tiny_skia::{Color, Pixmap, PixmapPaint};
@@ -124,14 +124,13 @@ fn collect(args: &Args) -> (Vec<Test>, usize) {
 }
 
 pub(crate) fn load_pdf(path: &str) -> Pdf {
-    try_load_pdf(path, "").unwrap()
+    try_load_pdf(path, PdfOptions::default()).unwrap()
 }
 
-pub(crate) fn try_load_pdf(path: &str, password: &str) -> Result<Pdf, String> {
+pub(crate) fn try_load_pdf(path: &str, options: PdfOptions<'_>) -> Result<Pdf, String> {
     let content = std::fs::read(WORKSPACE_PATH.join(path))
         .map_err(|err| format!("couldn't read {path}: {err}"))?;
-    Pdf::new_with_password(content, password)
-        .map_err(|err| format!("couldn't load {path}: {err:?}"))
+    Pdf::new_with_options(content, options).map_err(|err| format!("couldn't load {path}: {err:?}"))
 }
 
 pub(crate) fn interpreter_settings() -> InterpreterSettings {

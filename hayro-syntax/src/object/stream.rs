@@ -1,5 +1,6 @@
 //! Streams.
 
+use crate::Limits;
 use crate::crypto::DecryptionTarget;
 use crate::filter::Filter;
 use crate::object::Dict;
@@ -26,6 +27,38 @@ struct FiltersAndParams<'a> {
 pub struct Stream<'a> {
     dict: Dict<'a>,
     data: &'a [u8],
+}
+
+/// Decode standalone stream bytes using a serialized stream dictionary.
+///
+/// This is intended for copy-on-write/editing layers that already own the
+/// encoded payload and filter dictionary but do not have a source [`Pdf`](crate::Pdf)
+/// stream object. The dictionary must be a complete PDF dictionary object such
+/// as `<< /Filter /FlateDecode >>`.
+pub fn decode_standalone_stream(dictionary: &[u8], data: &[u8]) -> Result<Vec<u8>, DecodeFailure> {
+    let dict = Reader::new(dictionary)
+        .read_without_context::<Dict<'_>>()
+        .ok_or(DecodeFailure::Unknown)?;
+    Stream::new(data, dict).decoded().map(Cow::into_owned)
+}
+
+/// Decode standalone image-stream bytes with explicit image metadata.
+///
+/// Image filters such as DCT, JPX, JBIG2, and CCITT need dimensions and
+/// component information that are normally supplied by the containing image
+/// `XObject`. Copy-on-write callers can provide that metadata here without
+/// constructing a complete [`Pdf`](crate::Pdf).
+pub fn decode_standalone_image_stream(
+    dictionary: &[u8],
+    data: &[u8],
+    image_params: &ImageDecodeParams,
+) -> Result<Vec<u8>, DecodeFailure> {
+    let dict = Reader::new(dictionary)
+        .read_without_context::<Dict<'_>>()
+        .ok_or(DecodeFailure::Unknown)?;
+    Stream::new(data, dict)
+        .decoded_image(image_params)
+        .map(|result| result.data.into_owned())
 }
 
 impl PartialEq for Stream<'_> {
@@ -150,6 +183,11 @@ impl<'a> Stream<'a> {
         self.filters_and_params().filters
     }
 
+    /// Resource limits governing this stream.
+    pub fn limits(&self) -> Limits {
+        self.dict.ctx().xref().limits()
+    }
+
     /// Return the decoded data of the stream.
     pub fn decoded(&self) -> Result<Cow<'a, [u8]>, DecodeFailure> {
         self.decoded_image(&ImageDecodeParams::default())
@@ -187,6 +225,7 @@ impl<'a> Stream<'a> {
 
         let data = self.raw_data();
         let filters_and_params = self.filters_and_params();
+        let limits = self.limits();
 
         let mut current: Option<FilterResult<'a>> = None;
 
@@ -204,14 +243,19 @@ impl<'a> Stream<'a> {
                 current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data),
                 params,
                 image_params,
+                limits,
             )?;
             current = Some(new);
         }
 
-        Ok(current.unwrap_or(FilterResult {
+        let decoded = current.unwrap_or(FilterResult {
             data,
             image_data: None,
-        }))
+        });
+        if !limits.max_decoded_stream_size.permits(decoded.data.len()) {
+            return Err(DecodeFailure::StreamDecode);
+        }
+        Ok(decoded)
     }
 
     fn crypt_filter(&self) -> Option<Name<'a>> {
@@ -440,6 +484,37 @@ mod tests {
         assert_eq!(stream.data, b"abc");
         assert!(stream.dict().contains_key(crate::object::dict::keys::F));
         assert!(stream.decoded().is_err());
+    }
+
+    #[test]
+    fn standalone_stream_decodes_filter_chain() {
+        let result = super::decode_standalone_stream(
+            b"<< /Filter [/ASCIIHexDecode /RunLengthDecode] >>",
+            b"0241424380>",
+        )
+        .unwrap();
+        assert_eq!(result, b"ABC");
+        assert!(super::decode_standalone_stream(b"not a dictionary", b"").is_err());
+    }
+
+    #[test]
+    fn standalone_image_accepts_explicit_metadata() {
+        let params = super::ImageDecodeParams {
+            width: 3,
+            height: 1,
+            bpc: Some(8),
+            num_components: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::decode_standalone_image_stream(
+                b"<< /Filter /ASCIIHexDecode >>",
+                b"010203>",
+                &params,
+            )
+            .unwrap(),
+            [1, 2, 3],
+        );
     }
 
     #[test]

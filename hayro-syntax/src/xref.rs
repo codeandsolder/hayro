@@ -1,5 +1,6 @@
 //! Reading and querying the xref table of a PDF file.
 
+use crate::Limits;
 use crate::crypto::{DecryptionError, DecryptionTarget, Decryptor, get};
 use crate::data::Data;
 use crate::metadata::Metadata;
@@ -38,7 +39,7 @@ pub(crate) enum XRefError {
     Encryption(DecryptionError),
 }
 
-pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<XRef, XRefError> {
+pub(crate) fn root_xref(data: PdfData, password: &[u8], limits: Limits) -> Result<XRef, XRefError> {
     let mut xref_map = FxHashMap::default();
     let xref_pos = find_last_xref_pos(data.as_ref()).ok_or(XRefError::Unknown)?;
     let trailer =
@@ -50,21 +51,26 @@ pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<XRef, XRefErro
         XRefInput::TrailerDictData(trailer),
         false,
         password,
+        limits,
     )
 }
 
-pub(crate) fn fallback(data: PdfData, password: &[u8]) -> Option<XRef> {
-    let (xref_map, xref_input) = fallback_xref_map(&data, password);
+pub(crate) fn fallback(data: PdfData, password: &[u8], limits: Limits) -> Option<XRef> {
+    let (xref_map, xref_input) = fallback_xref_map(&data, password, limits);
 
     if let Some(xref_input) = xref_input {
-        XRef::new(data.clone(), xref_map, xref_input, true, password).ok()
+        XRef::new(data.clone(), xref_map, xref_input, true, password, limits).ok()
     } else {
         None
     }
 }
 
-fn fallback_xref_map<'a>(data: &'a PdfData, password: &[u8]) -> (XrefMap, Option<XRefInput<'a>>) {
-    fallback_xref_map_inner(data, ReaderContext::dummy(), true, password)
+fn fallback_xref_map<'a>(
+    data: &'a PdfData,
+    password: &[u8],
+    limits: Limits,
+) -> (XrefMap, Option<XRefInput<'a>>) {
+    fallback_xref_map_inner(data, ReaderContext::dummy(), true, password, limits)
 }
 
 fn fallback_xref_map_inner<'a>(
@@ -72,6 +78,7 @@ fn fallback_xref_map_inner<'a>(
     mut dummy_ctx: ReaderContext<'a>,
     recurse: bool,
     password: &[u8],
+    limits: Limits,
 ) -> (XrefMap, Option<XRefInput<'a>>) {
     let mut xref_map = FxHashMap::default();
     let mut trailer_dicts = vec![];
@@ -229,9 +236,10 @@ fn fallback_xref_map_inner<'a>(
             XRefInput::TrailerDictData(trailer_dict.as_ref().map(|d| d.data()).unwrap()),
             true,
             password,
+            limits,
         ) {
             let ctx = ReaderContext::new(&xref, false);
-            let (patched_map, _) = fallback_xref_map_inner(data, ctx, false, password);
+            let (patched_map, _) = fallback_xref_map_inner(data, ctx, false, password, limits);
             xref_map = patched_map;
         }
     }
@@ -255,24 +263,43 @@ const DUMMY_XREF: XRef = XRef(Inner::Dummy);
 pub struct XRef(Inner);
 
 impl XRef {
+    /// Resource limits configured for this document.
+    pub fn limits(&self) -> Limits {
+        match &self.0 {
+            Inner::Some(repr) => repr.limits,
+            Inner::Dummy => Limits::DEFAULT,
+        }
+    }
+
     fn new(
         data: PdfData,
         xref_map: XrefMap,
         input: XRefInput<'_>,
         repaired: bool,
         password: &[u8],
+        limits: Limits,
     ) -> Result<Self, XRefError> {
         // The trailer can only be resolved once the xref exists.
         let trailer_data = TrailerData::dummy();
+        let raw_trailer_data = match input {
+            XRefInput::TrailerDictData(data) => Some(data.to_vec()),
+            XRefInput::RootRef(_) => None,
+        };
 
         let mut xref = Self(Inner::Some(Arc::new(SomeRepr {
             data: Arc::new(Data::new(data)),
-            map: Arc::new(RwLock::new(MapRepr { xref_map, repaired })),
+            map: Arc::new(RwLock::new(MapRepr {
+                xref_map,
+                repaired,
+                repair_map: None,
+            })),
             decryptor: Arc::new(Decryptor::None),
             has_ocgs: false,
             metadata: Arc::new(Metadata::default()),
             trailer_data,
+            raw_trailer_data,
             password: password.to_vec(),
+            limits,
         })));
 
         // Read the trailer twice so the catalog can be in an encrypted object stream.
@@ -388,6 +415,27 @@ impl XRef {
         self.trailer_data().root_ref
     }
 
+    /// Return the object identifiers indexed by this cross-reference table.
+    pub fn object_ids(&self) -> Vec<ObjectIdentifier> {
+        match &self.0 {
+            Inner::Dummy => Vec::new(),
+            Inner::Some(repr) => repr.map.get().xref_map.keys().copied().collect(),
+        }
+    }
+
+    /// Return the final trailer dictionary used to construct this xref table.
+    ///
+    /// For PDFs recovered without a trailer dictionary, this returns `None`.
+    /// Xref streams are exposed through the same dictionary view; stream-only
+    /// mechanics such as `/W` and `/Index` are therefore visible to callers.
+    pub fn trailer(&self) -> Option<Dict<'_>> {
+        let Inner::Some(repr) = &self.0 else {
+            return None;
+        };
+        let data = repr.raw_trailer_data.as_deref()?;
+        Reader::new(data).read_with_context::<Dict<'_>>(&ReaderContext::new(self, false))
+    }
+
     /// Whether the PDF has optional content groups.
     pub fn has_optional_content_groups(&self) -> bool {
         match &self.0 {
@@ -441,19 +489,32 @@ impl XRef {
         }
     }
 
-    pub(crate) fn repair(&self) {
+    fn repair_entry(&self, id: ObjectIdentifier, broken: EntryType) -> bool {
         let Inner::Some(r) = &self.0 else {
-            unreachable!();
+            return false;
         };
 
         let mut locked = r.map.put();
+        if locked.xref_map.get(&id).copied() != Some(broken) {
+            return locked.xref_map.contains_key(&id);
+        }
         if locked.repaired {
-            return;
+            return false;
         }
 
-        let (xref_map, _) = fallback_xref_map(r.data.get(), &r.password);
-        locked.xref_map = xref_map;
-        locked.repaired = true;
+        let fallback = locked
+            .repair_map
+            .get_or_insert_with(|| fallback_xref_map(r.data.get(), &r.password, r.limits).0);
+        let replacement = fallback.get(&id).copied();
+
+        // A corrupt entry must not replace valid entries in the original xref.
+        if let Some(entry) = replacement.filter(|entry| *entry != broken) {
+            locked.xref_map.insert(id, entry);
+            true
+        } else {
+            locked.xref_map.remove(&id);
+            false
+        }
     }
 
     #[inline]
@@ -506,11 +567,7 @@ impl XRef {
             return None;
         };
 
-        // The flag must describe the map this entry came from.
-        let (entry, was_repaired) = {
-            let locked = repr.map.get();
-            (*locked.xref_map.get(&id)?, locked.repaired)
-        };
+        let entry = *repr.map.get().xref_map.get(&id)?;
 
         let mut r = Reader::new(repr.data.get().as_ref());
         let caller_ctx = ctx;
@@ -529,12 +586,14 @@ impl XRef {
                     }
                 } else {
                     // A valid object of another type needs no repair.
-                    if r.skip::<IndirectObject<Object<'_>>>(false).is_some() {
+                    if r.clone().read_without_context::<ObjectIdentifier>() == Some(id)
+                        && r.skip::<IndirectObject<Object<'_>>>(false).is_some()
+                    {
                         return None;
                     }
                 };
 
-                self.repair_and_get(id, caller_ctx, was_repaired)
+                self.repair_and_get(id, caller_ctx, entry)
             }
             EntryType::ObjStream(obj_stram_gen_num, index) => {
                 let obj_stream_id = ObjectIdentifier::new(obj_stram_gen_num, 0);
@@ -558,7 +617,7 @@ impl XRef {
                     return object_stream.get(index, &ctx);
                 }
 
-                self.repair_and_get(id, caller_ctx, was_repaired)
+                self.repair_and_get(id, caller_ctx, entry)
             }
         }
     }
@@ -567,18 +626,14 @@ impl XRef {
         &'a self,
         id: ObjectIdentifier,
         ctx: &ReaderContext<'a>,
-        was_repaired: bool,
+        broken: EntryType,
     ) -> Option<T>
     where
         T: ObjectLike<'a>,
     {
-        if was_repaired {
-            None
-        } else {
-            self.repair();
-
-            self.get_with::<T>(id, ctx)
-        }
+        self.repair_entry(id, broken)
+            .then(|| self.get_with::<T>(id, ctx))
+            .flatten()
     }
 }
 
@@ -610,6 +665,7 @@ type XrefMap = FxHashMap<ObjectIdentifier, EntryType>;
 struct MapRepr {
     xref_map: XrefMap,
     repaired: bool,
+    repair_map: Option<XrefMap>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -638,6 +694,8 @@ struct SomeRepr {
     has_ocgs: bool,
     password: Vec<u8>,
     trailer_data: TrailerData,
+    raw_trailer_data: Option<Vec<u8>>,
+    limits: Limits,
 }
 
 #[derive(Debug, Clone)]
@@ -1107,5 +1165,181 @@ mod tests {
             xref_stream_subsection(&mut Reader::new(&data), u32::MAX, 2, 1, 1, 0, &mut xref_map);
         assert!(result.is_none());
         assert!(xref_map.contains_key(&ObjectIdentifier::new(u32::MAX, 0)));
+    }
+
+    fn assert_preserved_trailer(parsed: &crate::Pdf) {
+        let mut ids = parsed.xref().object_ids();
+        ids.sort_by_key(|id| id.obj_number);
+        assert!(ids.contains(&ObjectIdentifier::new(1, 0)));
+        assert!(ids.contains(&ObjectIdentifier::new(2, 0)));
+        assert!(ids.contains(&ObjectIdentifier::new(3, 0)));
+        let trailer = parsed.xref().trailer().unwrap();
+        assert_eq!(trailer.get_ref(INFO), Some(object::ObjRef::new(3, 0)));
+        assert_eq!(
+            trailer.get::<Name<'_>>(b"Custom").as_deref(),
+            Some(b"Keep".as_slice())
+        );
+        assert!(trailer.contains_key(ID));
+    }
+
+    #[test]
+    fn exposes_classic_trailer_dictionary() {
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        );
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n",
+        );
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"3 0 obj\n<< /Producer (hayro-test) >>\nendobj\n",
+        );
+
+        let xref_offset = pdf.len();
+        pdf.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+        for offset in offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size 4 /Root 1 0 R /Info 3 0 R /ID [(abc) (def)] /Custom /Keep >>\nstartxref\n{xref_offset}\n%%EOF\n"
+            )
+            .as_bytes(),
+        );
+
+        let parsed = crate::Pdf::new(pdf).unwrap();
+        assert_preserved_trailer(&parsed);
+    }
+
+    #[test]
+    fn exposes_xref_stream_dictionary_as_trailer() {
+        let mut pdf = b"%PDF-1.5\n".to_vec();
+        let mut offsets = Vec::new();
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        );
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n",
+        );
+        append_test_object(
+            &mut pdf,
+            &mut offsets,
+            b"3 0 obj\n<< /Producer (hayro-test) >>\nendobj\n",
+        );
+
+        let xref_offset = pdf.len();
+        let mut entries = Vec::new();
+        push_test_xref_entry(&mut entries, 0, 0, 65535);
+        for &offset in &offsets {
+            push_test_xref_entry(&mut entries, 1, offset as u32, 0);
+        }
+        push_test_xref_entry(&mut entries, 1, xref_offset as u32, 0);
+
+        pdf.extend_from_slice(
+            format!(
+                "4 0 obj\n<< /Type /XRef /Size 5 /W [1 4 2] /Root 1 0 R /Info 3 0 R /ID [(abc) (def)] /Custom /Keep /Length {} >>\nstream\n",
+                entries.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(&entries);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+        let parsed = crate::Pdf::new(pdf).unwrap();
+        assert_preserved_trailer(&parsed);
+        let trailer = parsed.xref().trailer().unwrap();
+        assert_eq!(
+            trailer.get::<Name<'_>>(TYPE).as_deref(),
+            Some(b"XRef".as_slice())
+        );
+    }
+
+    #[test]
+    fn corrupt_normal_entry_does_not_discard_compressed_objects() {
+        let mut pdf = b"%PDF-1.5\n".to_vec();
+        let catalog_offset = pdf.len();
+        pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+        let object_stream_offset = pdf.len();
+        let object_stream_data = b"2 0 << /Type /Pages /Kids [] /Count 0 >>";
+        pdf.extend_from_slice(
+            format!(
+                "3 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Length {} >>\nstream\n",
+                object_stream_data.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(object_stream_data);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+
+        let xref_offset = pdf.len();
+        let mut entries = Vec::new();
+        push_test_xref_entry(&mut entries, 0, 0, 65535);
+        push_test_xref_entry(&mut entries, 1, catalog_offset as u32, 0);
+        push_test_xref_entry(&mut entries, 2, 3, 0);
+        push_test_xref_entry(&mut entries, 1, object_stream_offset as u32, 0);
+        // Deliberately corrupt object 4 by pointing it at object 1.
+        push_test_xref_entry(&mut entries, 1, catalog_offset as u32, 0);
+        push_test_xref_entry(&mut entries, 1, xref_offset as u32, 0);
+        pdf.extend_from_slice(
+            format!(
+                "5 0 obj\n<< /Type /XRef /Size 6 /W [1 4 2] /Root 1 0 R /Length {} >>\nstream\n",
+                entries.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(&entries);
+        pdf.extend_from_slice(b"\nendstream\nendobj\n");
+        pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
+
+        let parsed = crate::Pdf::new(pdf).unwrap();
+        assert!(
+            parsed
+                .xref()
+                .get::<Dict<'_>>(ObjectIdentifier::new(2, 0))
+                .is_some()
+        );
+        assert!(
+            parsed
+                .xref()
+                .get::<Object<'_>>(ObjectIdentifier::new(4, 0))
+                .is_none()
+        );
+        assert!(
+            parsed
+                .xref()
+                .get::<Dict<'_>>(ObjectIdentifier::new(2, 0))
+                .is_some()
+        );
+        let Inner::Some(repr) = &parsed.xref().0 else {
+            unreachable!()
+        };
+        let map = repr.map.get();
+        assert!(!map.repaired);
+        assert!(map.repair_map.is_some());
+        assert!(!map.xref_map.contains_key(&ObjectIdentifier::new(4, 0)));
+    }
+
+    fn append_test_object(pdf: &mut Vec<u8>, offsets: &mut Vec<usize>, object: &[u8]) {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(object);
+    }
+
+    fn push_test_xref_entry(entries: &mut Vec<u8>, kind: u8, field2: u32, field3: u16) {
+        entries.push(kind);
+        entries.extend_from_slice(&field2.to_be_bytes());
+        entries.extend_from_slice(&field3.to_be_bytes());
     }
 }

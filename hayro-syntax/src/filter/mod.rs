@@ -13,6 +13,7 @@ mod png;
 mod predictor;
 mod run_length;
 
+use crate::Limits;
 use crate::object::Dict;
 use crate::object::Name;
 use crate::object::dict::keys::*;
@@ -66,42 +67,48 @@ impl Filter {
         data: &[u8],
         params: &Dict<'_>,
         #[cfg_attr(not(feature = "images"), allow(unused))] image_params: &ImageDecodeParams,
+        limits: Limits,
     ) -> Result<FilterResult<'static>, DecodeFailure> {
-        match self {
-            Self::AsciiHexDecode => ascii_hex::decode(data)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::Ascii85Decode => ascii_85::decode(data)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::RunLengthDecode => run_length::decode(data)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::LzwDecode => lzw_flate::lzw::decode(data, params)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            Self::FlateDecode => lzw_flate::flate::decode(data, params)
-                .map(FilterResult::from_data)
-                .ok_or(DecodeFailure::StreamDecode),
-            #[cfg(feature = "images")]
-            Self::DctDecode => {
-                dct::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
-            }
-            #[cfg(feature = "images")]
-            Self::CcittFaxDecode => {
-                ccitt::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
-            }
-            #[cfg(feature = "images")]
-            Self::Jbig2Decode => {
-                jbig2::decode(data, params, image_params).ok_or(DecodeFailure::ImageDecode)
-            }
-            #[cfg(feature = "images")]
-            Self::JpxDecode => jpx::decode(data, image_params).ok_or(DecodeFailure::ImageDecode),
-            #[cfg(not(feature = "images"))]
-            Self::DctDecode | Self::CcittFaxDecode | Self::Jbig2Decode | Self::JpxDecode => {
-                Err(DecodeFailure::ImageDecode)
-            }
-            _ => Err(DecodeFailure::StreamDecode),
+        let limit = limits.max_decoded_stream_size;
+        let result =
+            match self {
+                Self::AsciiHexDecode => ascii_hex::decode(data, limit)
+                    .map(FilterResult::from_data)
+                    .ok_or(DecodeFailure::StreamDecode),
+                Self::Ascii85Decode => ascii_85::decode(data, limit)
+                    .map(FilterResult::from_data)
+                    .ok_or(DecodeFailure::StreamDecode),
+                Self::RunLengthDecode => run_length::decode(data, limit)
+                    .map(FilterResult::from_data)
+                    .ok_or(DecodeFailure::StreamDecode),
+                Self::LzwDecode => lzw_flate::lzw::decode(data, params, limit)
+                    .map(FilterResult::from_data)
+                    .ok_or(DecodeFailure::StreamDecode),
+                Self::FlateDecode => lzw_flate::flate::decode(data, params, limit)
+                    .map(FilterResult::from_data)
+                    .ok_or(DecodeFailure::StreamDecode),
+                #[cfg(feature = "images")]
+                Self::DctDecode => dct::decode(data, params, image_params, limits)
+                    .ok_or(DecodeFailure::ImageDecode),
+                #[cfg(feature = "images")]
+                Self::CcittFaxDecode => ccitt::decode(data, params, image_params, limits)
+                    .ok_or(DecodeFailure::ImageDecode),
+                #[cfg(feature = "images")]
+                Self::Jbig2Decode => jbig2::decode(data, params, image_params, limits)
+                    .ok_or(DecodeFailure::ImageDecode),
+                #[cfg(feature = "images")]
+                Self::JpxDecode => {
+                    jpx::decode(data, image_params, limits).ok_or(DecodeFailure::ImageDecode)
+                }
+                #[cfg(not(feature = "images"))]
+                Self::DctDecode | Self::CcittFaxDecode | Self::Jbig2Decode | Self::JpxDecode => {
+                    Err(DecodeFailure::ImageDecode)
+                }
+                _ => Err(DecodeFailure::StreamDecode),
+            }?;
+        if !limit.permits(result.data.len()) {
+            return Err(DecodeFailure::StreamDecode);
         }
+        Ok(result)
     }
 }

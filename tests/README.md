@@ -12,7 +12,7 @@ There are four different categories of tests:
 - PDFBox tests, which have been copied from the PDFBox issue tracker.
 - Corpus tests, which are taken from the [large-scale PDF corpus](https://pdfa.org/new-large-scale-pdf-corpus-now-publicly-available/).
 
-Each test category has its own manifest file, defining the names of the tests as well as some additional metadata. The raster tests are created from these manifests when the test runner starts, so adding a new test only requires adding an entry to the corresponding manifest.
+Each test category has its own manifest file, defining the names of the tests as well as some additional metadata. For trusted fixtures that intentionally contain decoded streams larger than the fork's normal resource limit, an entry may specify a bounded `"max_decoded_stream_size"` in bytes (the default remains 512 MiB). For example, PDFium 42270651 contains a 21,770 × 15,399 RGB JPEG requiring approximately 959 MiB of decoded data; its reference test uses a 1 GiB limit. The raster tests are created from these manifests when the test runner starts, so adding a new test only requires adding an entry to the corresponding manifest.
 
 ## Running the tests
 
