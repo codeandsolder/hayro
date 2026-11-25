@@ -475,6 +475,37 @@ mod tests {
     }
 
     #[test]
+    fn standalone_stream_decodes_filter_chain() {
+        let result = super::decode_standalone_stream(
+            b"<< /Filter [/ASCIIHexDecode /RunLengthDecode] >>",
+            b"0241424380>",
+        )
+        .unwrap();
+        assert_eq!(result, b"ABC");
+        assert!(super::decode_standalone_stream(b"not a dictionary", b"").is_err());
+    }
+
+    #[test]
+    fn standalone_image_accepts_explicit_metadata() {
+        let params = super::ImageDecodeParams {
+            width: 3,
+            height: 1,
+            bpc: Some(8),
+            num_components: Some(1),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::decode_standalone_image_stream(
+                b"<< /Filter /ASCIIHexDecode >>",
+                b"010203>",
+                &params,
+            )
+            .unwrap(),
+            [1, 2, 3],
+        );
+    }
+
+    #[test]
     fn inline_filter_abbreviation_still_decodes() {
         let mut r = Reader::new(b"<< /F /AHx >>");
         let dict = r

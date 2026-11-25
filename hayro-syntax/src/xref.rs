@@ -1169,6 +1169,11 @@ mod tests {
         );
 
         let parsed = crate::Pdf::new(pdf).unwrap();
+        let mut ids = parsed.xref().object_ids();
+        ids.sort_by_key(|id| id.obj_number);
+        assert!(ids.contains(&ObjectIdentifier::new(1, 0)));
+        assert!(ids.contains(&ObjectIdentifier::new(2, 0)));
+        assert!(ids.contains(&ObjectIdentifier::new(3, 0)));
         let trailer = parsed.xref().trailer().unwrap();
         assert_eq!(trailer.get_ref(INFO), Some(object::ObjRef::new(3, 0)));
         assert_eq!(
@@ -1218,6 +1223,11 @@ mod tests {
         pdf.extend_from_slice(format!("startxref\n{xref_offset}\n%%EOF\n").as_bytes());
 
         let parsed = crate::Pdf::new(pdf).unwrap();
+        let mut ids = parsed.xref().object_ids();
+        ids.sort_by_key(|id| id.obj_number);
+        assert!(ids.contains(&ObjectIdentifier::new(1, 0)));
+        assert!(ids.contains(&ObjectIdentifier::new(2, 0)));
+        assert!(ids.contains(&ObjectIdentifier::new(3, 0)));
         let trailer = parsed.xref().trailer().unwrap();
         assert_eq!(trailer.get_ref(INFO), Some(object::ObjRef::new(3, 0)));
         assert_eq!(
