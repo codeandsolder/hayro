@@ -1,5 +1,6 @@
 //! Streams.
 
+use crate::Limits;
 use crate::crypto::DecryptionTarget;
 use crate::filter::Filter;
 use crate::object::Dict;
@@ -182,6 +183,11 @@ impl<'a> Stream<'a> {
         self.filters_and_params().filters
     }
 
+    /// Resource limits governing this stream.
+    pub fn limits(&self) -> Limits {
+        self.dict.ctx().xref().limits()
+    }
+
     /// Return the decoded data of the stream.
     pub fn decoded(&self) -> Result<Cow<'a, [u8]>, DecodeFailure> {
         self.decoded_image(&ImageDecodeParams::default())
@@ -219,6 +225,7 @@ impl<'a> Stream<'a> {
 
         let data = self.raw_data();
         let filters_and_params = self.filters_and_params();
+        let limits = self.limits();
 
         let mut current: Option<FilterResult<'a>> = None;
 
@@ -236,14 +243,19 @@ impl<'a> Stream<'a> {
                 current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data),
                 params,
                 image_params,
+                limits,
             )?;
             current = Some(new);
         }
 
-        Ok(current.unwrap_or(FilterResult {
+        let decoded = current.unwrap_or(FilterResult {
             data,
             image_data: None,
-        }))
+        });
+        if !limits.max_decoded_stream_size.permits(decoded.data.len()) {
+            return Err(DecodeFailure::StreamDecode);
+        }
+        Ok(decoded)
     }
 
     fn crypt_filter(&self) -> Option<Name<'a>> {

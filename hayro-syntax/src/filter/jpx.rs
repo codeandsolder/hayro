@@ -1,3 +1,4 @@
+use crate::Limits;
 use crate::bit_reader::BitWriter;
 use crate::filter::FilterResult;
 use crate::object::stream::{ImageColorSpace, ImageData, ImageDecodeParams};
@@ -17,7 +18,11 @@ impl ImageColorSpace {
     }
 }
 
-pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterResult<'static>> {
+pub(crate) fn decode(
+    data: &[u8],
+    params: &ImageDecodeParams,
+    limits: Limits,
+) -> Option<FilterResult<'static>> {
     use crate::object::stream::ImageColorSpace;
 
     let settings = DecodeSettings {
@@ -35,6 +40,9 @@ pub(crate) fn decode(data: &[u8], params: &ImageDecodeParams) -> Option<FilterRe
 
     let width = image.width();
     let height = image.height();
+    if !limits.permits_image(width, height) {
+        return None;
+    }
     let bpc = if params.is_indexed {
         params.bpc.unwrap_or(image.original_bit_depth())
     } else {

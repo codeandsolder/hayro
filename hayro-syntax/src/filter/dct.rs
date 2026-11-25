@@ -1,3 +1,4 @@
+use crate::Limits;
 use crate::object::Dict;
 use crate::object::dict::keys::COLOR_TRANSFORM;
 use crate::object::stream::{FilterResult, ImageColorSpace, ImageData, ImageDecodeParams};
@@ -12,6 +13,7 @@ pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
+    limits: Limits,
 ) -> Option<FilterResult<'static>> {
     if image_params.width > u16::MAX as u32 || image_params.height > u16::MAX as u32 {
         return None;
@@ -25,6 +27,10 @@ pub(crate) fn decode(
         .set_max_height(u16::MAX as usize);
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(&*data), options);
     decoder.decode_headers().ok()?;
+    let (width, height) = decoder.dimensions()?;
+    if !limits.permits_image(width as u32, height as u32) {
+        return None;
+    }
 
     let color_transform = params.get::<u8>(COLOR_TRANSFORM);
     let input_color_space = decoder.input_colorspace().unwrap();

@@ -1,5 +1,6 @@
 //! Reading and querying the xref table of a PDF file.
 
+use crate::Limits;
 use crate::crypto::{DecryptionError, DecryptionTarget, Decryptor, get};
 use crate::data::Data;
 use crate::metadata::Metadata;
@@ -38,7 +39,7 @@ pub(crate) enum XRefError {
     Encryption(DecryptionError),
 }
 
-pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<XRef, XRefError> {
+pub(crate) fn root_xref(data: PdfData, password: &[u8], limits: Limits) -> Result<XRef, XRefError> {
     let mut xref_map = FxHashMap::default();
     let xref_pos = find_last_xref_pos(data.as_ref()).ok_or(XRefError::Unknown)?;
     let trailer =
@@ -50,21 +51,26 @@ pub(crate) fn root_xref(data: PdfData, password: &[u8]) -> Result<XRef, XRefErro
         XRefInput::TrailerDictData(trailer),
         false,
         password,
+        limits,
     )
 }
 
-pub(crate) fn fallback(data: PdfData, password: &[u8]) -> Option<XRef> {
-    let (xref_map, xref_input) = fallback_xref_map(&data, password);
+pub(crate) fn fallback(data: PdfData, password: &[u8], limits: Limits) -> Option<XRef> {
+    let (xref_map, xref_input) = fallback_xref_map(&data, password, limits);
 
     if let Some(xref_input) = xref_input {
-        XRef::new(data.clone(), xref_map, xref_input, true, password).ok()
+        XRef::new(data.clone(), xref_map, xref_input, true, password, limits).ok()
     } else {
         None
     }
 }
 
-fn fallback_xref_map<'a>(data: &'a PdfData, password: &[u8]) -> (XrefMap, Option<XRefInput<'a>>) {
-    fallback_xref_map_inner(data, ReaderContext::dummy(), true, password)
+fn fallback_xref_map<'a>(
+    data: &'a PdfData,
+    password: &[u8],
+    limits: Limits,
+) -> (XrefMap, Option<XRefInput<'a>>) {
+    fallback_xref_map_inner(data, ReaderContext::dummy(), true, password, limits)
 }
 
 fn fallback_xref_map_inner<'a>(
@@ -72,6 +78,7 @@ fn fallback_xref_map_inner<'a>(
     mut dummy_ctx: ReaderContext<'a>,
     recurse: bool,
     password: &[u8],
+    limits: Limits,
 ) -> (XrefMap, Option<XRefInput<'a>>) {
     let mut xref_map = FxHashMap::default();
     let mut trailer_dicts = vec![];
@@ -229,9 +236,10 @@ fn fallback_xref_map_inner<'a>(
             XRefInput::TrailerDictData(trailer_dict.as_ref().map(|d| d.data()).unwrap()),
             true,
             password,
+            limits,
         ) {
             let ctx = ReaderContext::new(&xref, false);
-            let (patched_map, _) = fallback_xref_map_inner(data, ctx, false, password);
+            let (patched_map, _) = fallback_xref_map_inner(data, ctx, false, password, limits);
             xref_map = patched_map;
         }
     }
@@ -255,12 +263,21 @@ const DUMMY_XREF: XRef = XRef(Inner::Dummy);
 pub struct XRef(Inner);
 
 impl XRef {
+    /// Resource limits configured for this document.
+    pub fn limits(&self) -> Limits {
+        match &self.0 {
+            Inner::Some(repr) => repr.limits,
+            Inner::Dummy => Limits::DEFAULT,
+        }
+    }
+
     fn new(
         data: PdfData,
         xref_map: XrefMap,
         input: XRefInput<'_>,
         repaired: bool,
         password: &[u8],
+        limits: Limits,
     ) -> Result<Self, XRefError> {
         // The trailer can only be resolved once the xref exists.
         let trailer_data = TrailerData::dummy();
@@ -282,6 +299,7 @@ impl XRef {
             trailer_data,
             raw_trailer_data,
             password: password.to_vec(),
+            limits,
         })));
 
         // Read the trailer twice so the catalog can be in an encrypted object stream.
@@ -486,7 +504,7 @@ impl XRef {
 
         let fallback = locked
             .repair_map
-            .get_or_insert_with(|| fallback_xref_map(r.data.get(), &r.password).0);
+            .get_or_insert_with(|| fallback_xref_map(r.data.get(), &r.password, r.limits).0);
         let replacement = fallback.get(&id).copied();
 
         // A corrupt entry must not replace valid entries in the original xref.
@@ -677,6 +695,7 @@ struct SomeRepr {
     password: Vec<u8>,
     trailer_data: TrailerData,
     raw_trailer_data: Option<Vec<u8>>,
+    limits: Limits,
 }
 
 #[derive(Debug, Clone)]
