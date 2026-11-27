@@ -1,10 +1,14 @@
 {
   "source": "LaurenzV/hayro:main",
-  "lastAttempt": 1795789304455,
+  "lastAttempt": 1795789306272,
   "observations": [
     {
       "sha": "e7ada1354dff4041cdeed3d8ba56fe01b6186132",
       "firstObserved": 1795650883668
+    },
+    {
+      "sha": "f139fd6f23c25aee11df31c162222d84a1affa70",
+      "firstObserved": 1795789306272
     }
   ]
 }
