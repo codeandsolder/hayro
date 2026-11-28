@@ -11,11 +11,11 @@ permissions:
 
 jobs:
   sync:
-    uses: codeandsolder/ci-workflows/.github/workflows/upstream-tracking.yml@c9cff3b64df2fb2295270a09e8e38dbf18e31daf # main
+    uses: codeandsolder/ci-workflows/.github/workflows/upstream-tracking.yml@1ef8b180d04fbeb8c095e8d701f8a5107472370e # main
     with:
       upstream-repository: LaurenzV/hayro
       upstream-branch: main
       target-branch: main
       workflow-policy: preserve
       validation-script: .github/scripts/validate-upstream.sh
-      rust-toolchain: nightly-2026-11-22
+      rust-toolchain: repository
