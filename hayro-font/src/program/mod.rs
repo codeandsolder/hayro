@@ -333,3 +333,17 @@ pub(crate) fn content_hash(data: &[u8], index: u32) -> u128 {
     (data, index).hash(&mut state);
     state.finish128().as_u128()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_type1_font_produces_glyph_outline() {
+        let bytes: &[u8] = include_bytes!("../../assets/FoxitSans.pfb");
+        let program = FontProgram::new(Arc::new(bytes), 0).expect("parse Type 1 font");
+        assert_eq!(program.kind(), ProgramKind::Type1);
+        let glyph = program.glyph_by_name("A").expect("find glyph A");
+        assert!(!program.outline(glyph).elements().is_empty());
+    }
+}
