@@ -29,6 +29,7 @@ pub(crate) fn decode(
         ..DecodeLimits::default()
     };
     let mut decoder = Decoder::new_with_limits(&data, codec_limits).ok()?;
+    decoder.set_lenient(true);
     let frame = decoder.header().clone();
     let (width, height) = frame.dimensions();
     let components = frame.components.len();
@@ -383,6 +384,27 @@ mod tests {
                 &image.data[..4]
             );
         }
+    }
+
+    #[test]
+    fn jpeg_recovers_missing_eoi() {
+        let pixels = [203, 61, 17].repeat(16 * 8);
+        let jpeg = Encoder::new(&pixels, 16, 8, PixelFormat::Rgb)
+            .quality(95)
+            .subsampling(Subsampling::S444)
+            .encode()
+            .unwrap();
+        assert_eq!(&jpeg[jpeg.len() - 2..], &[0xff, 0xd9]);
+        let params = image_params(16, 8, 3);
+        let full = decode(&jpeg, &Dict::default(), &params, Limits::DEFAULT).unwrap();
+        let truncated = decode(
+            &jpeg[..jpeg.len() - 2],
+            &Dict::default(),
+            &params,
+            Limits::DEFAULT,
+        )
+        .unwrap();
+        assert_eq!(truncated.data, full.data);
     }
 
     #[test]
