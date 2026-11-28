@@ -21,7 +21,7 @@ members = [
 [workspace.package]
 authors = ["Laurenz Stampfl <laurenz.stampfl@gmail.com>"]
 edition = "2024"
-rust-version = "1.92" # also change in ci.yml
+rust-version = "1.99"
 repository = "https://github.com/LaurenzV/hayro"
 readme = "README.md"
 license = "Apache-2.0 OR MIT"
@@ -46,8 +46,7 @@ image = { version = "0.25", default-features = false }
 kurbo = { version = "0.13.0" }
 resvg = { version = "0.47.0" }
 flate2 = { version = "1" }
-miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
-zlib-rs = { version = "0.6.8", default-features = false, features = ["rust-allocator"] }
+zlib-rs = { git = "https://github.com/codeandsolder/zlib-rs-fast", rev = "1f746b2e90019666a0afadfb49740a5d13908296", default-features = false, features = ["rust-allocator"] }
 phf = { version = "0.13.1", default-features = false }
 moxcms = { version = "0.8.1" }
 rustc-hash = { version = "2" }

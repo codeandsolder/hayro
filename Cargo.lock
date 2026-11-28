@@ -712,7 +712,6 @@ dependencies = [
  "hayro-jpeg2000",
  "md5",
  "memchr",
- "miniz_oxide",
  "rustc-hash",
  "sha2",
  "smallvec",
@@ -2100,8 +2099,7 @@ checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 [[package]]
 name = "zlib-rs"
 version = "0.6.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"
+source = "git+https://github.com/codeandsolder/zlib-rs-fast?rev=1f746b2e90019666a0afadfb49740a5d13908296#1f746b2e90019666a0afadfb49740a5d13908296"
 
 [[package]]
 name = "zmij"
