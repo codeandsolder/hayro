@@ -26,10 +26,8 @@ pub(crate) mod flate {
     }
 
     // One extra byte distinguishes a stream at the limit from an overflowing one.
-    fn grow_output(out: &mut Vec<u8>, limit: Limit<usize>, prefix: usize) {
-        let max = limit
-            .bound()
-            .map_or(usize::MAX, |n| n.saturating_add(1).saturating_add(prefix));
+    fn grow_output(out: &mut Vec<u8>, limit: Limit<usize>) {
+        let max = limit.bound().map_or(usize::MAX, |n| n.saturating_add(1));
         out.resize(out.len().saturating_mul(2).max(WINDOW_SIZE).min(max), 0);
     }
 
@@ -44,7 +42,6 @@ pub(crate) mod flate {
             .then_some(body)
     }
 
-    #[cfg(feature = "unsafe")]
     fn inflate(
         mut data: &[u8],
         zero_window: bool,
@@ -62,7 +59,7 @@ pub(crate) mod flate {
         let mut written = 0;
 
         loop {
-            grow_output(&mut out, limit, 0);
+            grow_output(&mut out, limit);
 
             let (total_in, total_out) = (inflate.total_in(), inflate.total_out());
             let result = inflate.decompress(data, &mut out[written..], InflateFlush::Finish);
@@ -84,51 +81,6 @@ pub(crate) mod flate {
                     out.truncate(written);
                     return Err(InflateError::Partial(out));
                 }
-            }
-        }
-    }
-
-    #[cfg(not(feature = "unsafe"))]
-    fn inflate(
-        mut data: &[u8],
-        zero_window: bool,
-        limit: Limit<usize>,
-    ) -> Result<Vec<u8>, InflateError> {
-        use alloc::boxed::Box;
-        use alloc::vec;
-        use miniz_oxide::inflate::TINFLStatus;
-        use miniz_oxide::inflate::core::inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF;
-        use miniz_oxide::inflate::core::{DecompressorOxide, decompress};
-
-        let start = if zero_window { WINDOW_SIZE } else { 0 };
-        let mut decompressor = Box::<DecompressorOxide>::default();
-        let mut out = vec![0; start];
-        let mut written = start;
-
-        loop {
-            grow_output(&mut out, limit, start);
-
-            let (status, consumed, produced) = decompress(
-                &mut decompressor,
-                data,
-                &mut out,
-                written,
-                TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF,
-            );
-            written += produced;
-            if !limit.permits(written - start) {
-                return Err(InflateError::Limit);
-            }
-            data = data.get(consumed..).unwrap_or_default();
-
-            if status != TINFLStatus::HasMoreOutput {
-                out.truncate(written);
-                out.drain(..start);
-
-                return match status {
-                    TINFLStatus::Done | TINFLStatus::FailedCannotMakeProgress => Ok(out),
-                    _ => Err(InflateError::Partial(out)),
-                };
             }
         }
     }
@@ -302,16 +254,35 @@ mod tests {
 
     #[test]
     fn rejects_flate_expansion_at_configured_limit() {
-        let input = miniz_oxide::deflate::compress_to_vec_zlib(&vec![0; 128 * 1024], 6);
-        assert!(flate::decode(&input, &Dict::default(), Limit::AtMost(64 * 1024)).is_none());
+        let plain = vec![0; 128 * 1024];
+        let mut compressed = vec![0; zlib_rs::compress_bound(plain.len())];
+        let (input, status) = zlib_rs::compress_slice(&mut compressed, &plain, zlib_rs::DeflateConfig::new(6));
+        assert_eq!(status, zlib_rs::ReturnCode::Ok);
+        assert!(flate::decode(input, &Dict::default(), Limit::AtMost(64 * 1024)).is_none());
         assert_eq!(
-            flate::decode(&input, &Dict::default(), Limit::AtMost(128 * 1024)).map(|d| d.len()),
+            flate::decode(input, &Dict::default(), Limit::AtMost(128 * 1024)).map(|d| d.len()),
             Some(128 * 1024),
         );
         assert_eq!(
-            flate::decode(&input, &Dict::default(), Limit::Unlimited).map(|d| d.len()),
+            flate::decode(input, &Dict::default(), Limit::Unlimited).map(|d| d.len()),
             Some(128 * 1024),
         );
+    }
+
+    #[test]
+    fn flate_zero_window_and_exact_limits() {
+        let input = [0x03, 0x02, 0x00];
+        assert_eq!(flate::decode(&input, &Dict::default(), Limit::AtMost(3)).as_deref(), Some([0; 3].as_slice()));
+        assert!(flate::decode(&input, &Dict::default(), Limit::AtMost(2)).is_none());
+        assert!(flate::decode(&input, &Dict::default(), Limit::AtMost(0)).is_none());
+        assert_eq!(flate::decode(&[0x03, 0x00], &Dict::default(), Limit::AtMost(0)).as_deref(), Some([].as_slice()));
+    }
+
+    #[test]
+    fn flate_truncated_stored_block_preserves_prefix() {
+        let input = [0x01, 0x05, 0x00, 0xfa, 0xff, b'H', b'e', b'l'];
+        assert_eq!(flate::decode(&input, &Dict::default(), Limit::AtMost(3)).as_deref(), Some(b"Hel".as_slice()));
+        assert!(flate::decode(&input, &Dict::default(), Limit::AtMost(2)).is_none());
     }
 
     #[test]

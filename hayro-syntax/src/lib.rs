@@ -52,7 +52,6 @@ it.
 
 For better performance, it is strongly recommended to enable the `unsafe` feature,
 which results in slightly more unsafe code but gives better performance:
-- We will use `zlib-rs` instead of `miniz_oxide` for decoding flate streams.
 - SIMD will be enabled to accelerate decoding of images.
 - `memchr` will be used to accelerate some of the fallback parsing code.
 
