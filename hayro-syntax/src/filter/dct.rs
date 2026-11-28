@@ -159,7 +159,7 @@ fn raw_channels(decoder: Decoder<'_>, frame: &FrameHeader, ycck: bool) -> Option
     }
     if ycck {
         // JPEG YCbCr uses centred chroma; PDF expects the inverse RGB samples and unchanged K.
-        for pixel in output.chunks_exact_mut(4) {
+        for pixel in output.as_chunks_mut::<4>().0 {
             let y = f32::from(pixel[0]);
             let cb = f32::from(pixel[1]) - 128.;
             let cr = f32::from(pixel[2]) - 128.;
@@ -250,6 +250,7 @@ fn find_sof_marker(data: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::object::FromBytes;
     use libjpeg_turbo_rs::{Encoder, Subsampling};
 
     fn image_params(width: u32, height: u32, components: u8) -> ImageDecodeParams {
@@ -282,14 +283,22 @@ mod tests {
         assert_eq!(rgb.data.len(), pixels.len());
         assert_eq!(raw.data.len(), pixels.len());
         assert!(
-            rgb.data.chunks_exact(3).all(|p| p[0].abs_diff(203) <= 3
-                && p[1].abs_diff(61) <= 3
-                && p[2].abs_diff(17) <= 3)
+            rgb.data
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .all(|p| p[0].abs_diff(203) <= 3
+                    && p[1].abs_diff(61) <= 3
+                    && p[2].abs_diff(17) <= 3)
         );
         assert!(
-            raw.data.chunks_exact(3).all(|p| p[0].abs_diff(98) <= 3
-                && p[1].abs_diff(82) <= 3
-                && p[2].abs_diff(203) <= 3)
+            raw.data
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .all(|p| p[0].abs_diff(98) <= 3
+                    && p[1].abs_diff(82) <= 3
+                    && p[2].abs_diff(203) <= 3)
         );
         assert!(matches!(
             rgb.image_data.unwrap().color_space,
