@@ -2,8 +2,10 @@ use crate::Limits;
 use crate::object::Dict;
 use crate::object::dict::keys::COLOR_TRANSFORM;
 use crate::object::stream::{FilterResult, ImageColorSpace, ImageData, ImageDecodeParams};
-use alloc::{borrow::Cow, vec::Vec};
-use libjpeg_turbo_rs::{ColorSpace, DecodeLimits, Decoder, FrameHeader, PixelFormat};
+use alloc::borrow::Cow;
+mod components;
+use components::raw_channels;
+use libjpeg_turbo_rs::{ColorSpace, DecodeLimits, Decoder, PixelFormat};
 
 pub(crate) fn decode(
     data: &[u8],
@@ -56,7 +58,13 @@ pub(crate) fn decode(
     };
     let decoded = match components {
         2 => raw_channels(decoder, &frame, false)?,
-        4 if !standard_four_component_sampling(&frame) => {
+        4 if frame.precision == 8
+            && !frame.is_lossless
+            && frame.components.windows(2).any(|pair| {
+                pair[0].horizontal_sampling != pair[1].horizontal_sampling
+                    || pair[0].vertical_sampling != pair[1].vertical_sampling
+            }) =>
+        {
             raw_channels(decoder, &frame, input == ColorSpace::Ycck)?
         }
         _ => {
@@ -96,80 +104,6 @@ pub(crate) fn decode(
             height: u32::from(frame.height),
         }),
     })
-}
-
-fn standard_four_component_sampling(frame: &FrameHeader) -> bool {
-    let [first, second, third, fourth] = frame.components.as_slice() else {
-        return false;
-    };
-    let factors = |component: &libjpeg_turbo_rs::ComponentInfo| {
-        (component.horizontal_sampling, component.vertical_sampling)
-    };
-    let (h, v) = factors(first);
-    let (ch, cv) = factors(second);
-    factors(second) == factors(third)
-        && factors(first) == factors(fourth)
-        && ch != 0
-        && cv != 0
-        && h >= ch
-        && v >= cv
-        && h.is_multiple_of(ch)
-        && v.is_multiple_of(cv)
-}
-
-// Raw component planes also handle multiband images and arbitrary legal sampling ratios.
-fn raw_channels(decoder: Decoder<'_>, frame: &FrameHeader, ycck: bool) -> Option<Vec<u8>> {
-    let (width, height) = frame.dimensions();
-    let count = frame.components.len();
-    let max_h = usize::from(
-        frame
-            .components
-            .iter()
-            .map(|c| c.horizontal_sampling)
-            .max()?,
-    );
-    let max_v = usize::from(frame.components.iter().map(|c| c.vertical_sampling).max()?);
-    if max_h == 0 || max_v == 0 {
-        return None;
-    }
-    let raw = decoder.decode_raw().ok()?;
-    if raw.width != width || raw.height != height || raw.num_components != count {
-        return None;
-    }
-    let length = width.checked_mul(height)?.checked_mul(count)?;
-    let mut output = Vec::new();
-    output.try_reserve_exact(length).ok()?;
-    for y in 0..height {
-        for x in 0..width {
-            for (i, component) in frame.components.iter().enumerate() {
-                let h = usize::from(component.horizontal_sampling);
-                let v = usize::from(component.vertical_sampling);
-                let sx = x.checked_mul(h)? / max_h;
-                let sy = y.checked_mul(v)? / max_v;
-                let stride = *raw.plane_widths.get(i)?;
-                if sx >= stride || sy >= *raw.plane_heights.get(i)? {
-                    return None;
-                }
-                output.push(
-                    *raw.planes
-                        .get(i)?
-                        .get(sy.checked_mul(stride)?.checked_add(sx)?)?,
-                );
-            }
-        }
-    }
-    if ycck {
-        // JPEG YCbCr uses centred chroma; PDF expects the inverse RGB samples and unchanged K.
-        for pixel in output.as_chunks_mut::<4>().0 {
-            let y = f32::from(pixel[0]);
-            let cb = f32::from(pixel[1]) - 128.;
-            let cr = f32::from(pixel[2]) - 128.;
-            pixel[0] = (255. - (y + 1.402 * cr)).clamp(0., 255.) as u8;
-            pixel[1] = (255. - (y - 0.344136 * cb - 0.714136 * cr)).clamp(0., 255.) as u8;
-            pixel[2] = (255. - (y + 1.772 * cb)).clamp(0., 255.) as u8;
-        }
-    }
-    Some(output)
 }
 
 fn maybe_patch_jpeg_dimensions<'a>(
@@ -252,6 +186,7 @@ fn find_sof_marker(data: &[u8]) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::object::FromBytes;
+    use alloc::vec;
     use libjpeg_turbo_rs::{Encoder, Subsampling};
 
     fn image_params(width: u32, height: u32, components: u8) -> ImageDecodeParams {
