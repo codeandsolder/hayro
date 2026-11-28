@@ -17,7 +17,7 @@ kurbo = { workspace = true }
 phf = { workspace = true, features = ["macros"] }
 rustc-hash = { workspace = true }
 siphasher = { workspace = true }
-skrifa = { workspace = true }
+skrifa = { workspace = true, features = ["type1"] }
 
 [features]
 default = ["embed-fonts"]
