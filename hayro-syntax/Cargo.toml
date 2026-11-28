@@ -11,15 +11,14 @@ readme = "README.md"
 
 [features]
 default = ["std", "images"]
-std = ["hayro-ccitt?/std", "hayro-jbig2?/std", "hayro-jpeg2000?/std", "dep:rustc-hash", "zune-jpeg?/std"]
-images = ["dep:zune-jpeg", "dep:hayro-ccitt", "dep:hayro-jbig2", "dep:hayro-jpeg2000"]
+std = ["hayro-ccitt?/std", "hayro-jbig2?/std", "hayro-jpeg2000?/std", "dep:rustc-hash", "libjpeg-turbo-rs?/std"]
+images = ["dep:libjpeg-turbo-rs", "dep:hayro-ccitt", "dep:hayro-jbig2", "dep:hayro-jpeg2000"]
 unsafe = [
     "std",
     "dep:memchr",
     "hayro-jbig2?/simd",
     "hayro-jpeg2000?/simd",
-    "zune-jpeg?/x86",
-    "zune-jpeg?/neon",
+    "libjpeg-turbo-rs?/simd",
 ]
 
 [dependencies]
@@ -28,7 +27,7 @@ smallvec = { workspace = true }
 zlib-rs = { workspace = true }
 memchr = { workspace = true, optional = true }
 
-zune-jpeg = { workspace = true, optional = true }
+libjpeg-turbo-rs = { workspace = true, optional = true }
 hayro-ccitt = { workspace = true, optional = true }
 hayro-jbig2 = { workspace = true, optional = true }
 hayro-jpeg2000 = { workspace = true, optional = true }

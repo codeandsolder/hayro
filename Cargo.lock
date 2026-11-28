@@ -710,13 +710,13 @@ dependencies = [
  "hayro-ccitt",
  "hayro-jbig2",
  "hayro-jpeg2000",
+ "libjpeg-turbo-rs",
  "md5",
  "memchr",
  "rustc-hash",
  "sha2",
  "smallvec",
  "zlib-rs",
- "zune-jpeg",
 ]
 
 [[package]]
@@ -896,6 +896,15 @@ checksum = "f12a681b7dd8ce12bff52488013ba614b869148d54dd79836ab85aafdd53f08d"
 dependencies = [
  "arbitrary",
  "cc",
+]
+
+[[package]]
+name = "libjpeg-turbo-rs"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "083fece5e695fd3678ab4ec206f6beb23cc511c1f65e797812dc88f5502591fa"
+dependencies = [
+ "thiserror",
 ]
 
 [[package]]
