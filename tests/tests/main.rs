@@ -113,7 +113,10 @@ fn collect(args: &Args) -> (Vec<Test>, usize) {
         .chain(write::tests())
         .chain(load::tests())
         .chain(text::tests())
-        .chain([Test::unit("visibility", visibility)])
+        .chain([
+            Test::unit("visibility", visibility),
+            Test::unit("reference_identity", references::test_reference_identity),
+        ])
         .filter(|test| args.matches(&test.name))
         .collect();
     tests.sort_by(|a, b| a.name.cmp(&b.name));

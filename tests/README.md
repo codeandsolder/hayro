@@ -39,6 +39,8 @@ Run `cargo test -p hayro-tests --release -- --help` to see all options.
 
 The rendered pages are compared against reference images, which are not checked into the repository. Instead, `references.lock` stores a hash of every reference image, and the images themselves are stored on the R2 object storage under their hash. When a page renders exactly like its reference image, its hash matches and the test passes without needing the image at all. Otherwise, the test runner downloads the reference image into the `references` folder and compares both images.
 
+Fork-owned reference images use `fork:<hash>` in `references.lock` and are stored as `<hash>.png` assets in the [fork's reference release](https://github.com/codeandsolder/hayro/releases/tag/render-references). The source is explicit; a missing fork asset is an error, not a fallback to an unrelated image. Downloaded and cached images are verified against their decoded RGBA content hash. Publish reviewed assets before changing the lockfile. Never overwrite an existing content-addressed asset. Upstream entries remain ordinary hashes.
+
 The reference images are rendered on macOS. Since other platforms round slightly differently in a few places, the tests accept deviations of up to 3 per color channel. Some tests deviate by more than that on some pages, in which case `"max_diff_pixels": <n>` in their manifest entry allows up to `n` pixels per page to deviate further.
 
 If a page differs from its reference image or doesn't have one yet, the test fails, and the test runner writes a report to `report.html`. It lists every affected page and lets you compare it with its reference side by side, as a diff overlay or by flipping between the two.
@@ -49,7 +51,7 @@ A change that affects rendering or adds a test has to update `references.lock` i
 HAYRO_CI=1 cargo test -p hayro-tests --release
 ```
 
-Check that `ci/references.lock` only differs from `references.lock` for the pages you expect, copy it over `references.lock` and delete `ci/`. The new images in `ci/images` are uploaded to the object storage by a maintainer.
+Check that `ci/references.lock` only differs from `references.lock` for the pages you expect, copy it over `references.lock` and delete `ci/`. The new images in `ci/images` are uploaded to the object storage by a maintainer. For fork-specific changes, upload only reviewed new images to the fork reference release and mark their lockfile values `fork:<hash>`. Merge selected keys into the existing lockfile rather than replacing it when running a subset.
 
 To also keep the rendered output of every test (the PNGs, SVGs and PDFs) in the `store` folder, pass `--store`.
 

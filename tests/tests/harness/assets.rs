@@ -1,4 +1,5 @@
 use crate::WORKSPACE_PATH;
+use crate::harness::references::{Origin, Reference};
 use crate::harness::runner::{Outcome, Test};
 use crate::harness::ui::Ui;
 use std::collections::{BTreeSet, HashMap};
@@ -83,8 +84,14 @@ static AGENT: LazyLock<ureq::Agent> = LazyLock::new(|| {
         .into()
 });
 
-pub(crate) fn download_reference(hash: &str, file: &Path) -> Result<u64, String> {
-    let url = format!("{BASE_URL}/references/{hash}.png");
+pub(crate) fn download_reference(reference: Reference<'_>, file: &Path) -> Result<u64, String> {
+    let base = match reference.origin {
+        Origin::Upstream => "https://hayro-assets.dev/references",
+        Origin::Fork => {
+            "https://github.com/codeandsolder/hayro/releases/download/render-references"
+        }
+    };
+    let url = format!("{base}/{}.png", reference.hash);
     download_one(&AGENT, &url, &file.to_string_lossy())
 }
 

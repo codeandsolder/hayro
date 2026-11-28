@@ -40,8 +40,45 @@ fn cache_path(hash: &str) -> PathBuf {
         .join(format!("{hash}.png"))
 }
 
-pub(crate) fn expected(key: &str) -> Option<&'static str> {
-    LOCKFILE.get(key).map(String::as_str)
+/// A lockfile entry identifies both immutable pixels and their publishing origin.
+#[derive(Clone, Copy)]
+pub(crate) struct Reference<'a> {
+    pub(crate) hash: &'a str,
+    entry: &'a str,
+    pub(crate) origin: Origin,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Origin {
+    Upstream,
+    Fork,
+}
+
+impl<'a> Reference<'a> {
+    fn parse(entry: &'a str) -> Option<Self> {
+        let (hash, origin) = entry
+            .strip_prefix("fork:")
+            .map_or((entry, Origin::Upstream), |hash| (hash, Origin::Fork));
+        if hash.len() != 32
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return None;
+        }
+        Some(Self {
+            hash,
+            entry,
+            origin,
+        })
+    }
+}
+
+pub(crate) fn expected(key: &str) -> Option<Reference<'static>> {
+    LOCKFILE.get(key).map(|entry| {
+        Reference::parse(entry)
+            .unwrap_or_else(|| panic!("invalid reference identity for {key}: {entry}"))
+    })
 }
 
 pub(crate) fn hash(image: &RgbaImage) -> String {
@@ -61,20 +98,23 @@ pub(crate) fn hash(image: &RgbaImage) -> String {
 pub(crate) fn record(key: &str, hash: &str, image: &RgbaImage) {
     let Some(dir) = &args().ci else { return };
 
+    let unchanged = expected(key).filter(|reference| reference.hash == hash);
+    // Regeneration must not lose the source of an unchanged fork reference.
+    let entry = unchanged.map_or(hash, |reference| reference.entry);
     RENDERED
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .insert(key.to_string(), hash.to_string());
+        .insert(key.to_string(), entry.to_string());
 
-    if expected(key) != Some(hash) {
+    if unchanged.is_none() {
         let path = dir.join("images").join(format!("{hash}.png"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, encode_png(image)).unwrap();
     }
 }
 
-pub(crate) fn load(hash: &str) -> Result<(RgbaImage, PathBuf), String> {
-    let path = cache_path(hash);
+pub(crate) fn load(reference: Reference<'_>) -> Result<(RgbaImage, PathBuf), String> {
+    let path = cache_path(reference.hash);
 
     if !path.exists() {
         if args().offline {
@@ -84,7 +124,7 @@ pub(crate) fn load(hash: &str) -> Result<(RgbaImage, PathBuf), String> {
         let _guard = DOWNLOAD.lock().unwrap_or_else(PoisonError::into_inner);
         if !path.exists() {
             let relative = path.strip_prefix(&*WORKSPACE_PATH).unwrap();
-            assets::download_reference(hash, relative)
+            assets::download_reference(reference, relative)
                 .map_err(|err| format!("couldn't be downloaded: {err}"))?;
         }
     }
@@ -93,6 +133,14 @@ pub(crate) fn load(hash: &str) -> Result<(RgbaImage, PathBuf), String> {
     let image = load_from_memory(&data)
         .map_err(|err| format!("is invalid: {err}"))?
         .into_rgba8();
+
+    let actual = hash(&image);
+    if actual != reference.hash {
+        return Err(format!(
+            "has incorrect content hash {actual}, expected {}",
+            reference.hash
+        ));
+    }
 
     Ok((image, path))
 }
@@ -104,4 +152,25 @@ pub(crate) fn write_lockfile(dir: &Path) {
         out
     });
     std::fs::write(dir.join("references.lock"), content).unwrap();
+}
+
+/// Exercise source selection and lockfile grammar independently of network availability.
+pub(crate) fn test_reference_identity() {
+    let hash = "0123456789abcdef0123456789abcdef";
+    let fork = format!("fork:{hash}");
+    let upstream = Reference::parse(hash).unwrap();
+    let fork = Reference::parse(&fork).unwrap();
+    assert_eq!(upstream.hash, fork.hash);
+    assert_eq!(upstream.origin, Origin::Upstream);
+    assert_eq!(fork.origin, Origin::Fork);
+    assert_eq!(fork.entry, format!("fork:{hash}"));
+    for invalid in [
+        "",
+        "fork:",
+        "unknown:0123456789abcdef0123456789abcdef",
+        "../../a.png",
+        "0123456789abcdef0123456789abcdeF",
+    ] {
+        assert!(Reference::parse(invalid).is_none());
+    }
 }

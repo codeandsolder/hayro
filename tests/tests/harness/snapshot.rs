@@ -65,7 +65,7 @@ pub(crate) fn check(
 
         let report_dir = report::files_dir().join(&relative);
 
-        let Some(expected) = references::expected(&key) else {
+        let Some(reference) = references::expected(&key) else {
             write_file(&report_dir.join(&file), &encode_png(actual));
             report::add(report::Page::Missing {
                 index: page_index,
@@ -83,11 +83,12 @@ pub(crate) fn check(
             continue;
         };
 
+        let expected = reference.hash;
         if hash == expected {
             continue;
         }
 
-        let (reference, reference_path) = match references::load(expected) {
+        let (reference, reference_path) = match references::load(reference) {
             Ok(reference) => reference,
             Err(err) => {
                 failures.push((
