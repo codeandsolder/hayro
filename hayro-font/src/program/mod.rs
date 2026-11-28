@@ -339,8 +339,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_type1_font_produces_glyph_outline() {
-        let bytes: &[u8] = include_bytes!("../../assets/FoxitSans.pfb");
+    fn type1_font_produces_glyph_outline() {
+        // Minimal Type 1 PFA with an unencrypted .notdef and triangular A
+        // charstring inside the standard eexec-encrypted private dictionary.
+        let bytes: &[u8] = b"%!PS-AdobeFont-1.0: Test\n/FontName /Test def\n/FontMatrix [0.001 0 0 0.001 0 0] readonly def\ncurrentfile eexec\n\
+            d9d66f6370c127631d46138caf4edf8b2ca684ccaafe57d992abcb2db49e2a563188d2f86a55947f\n\
+            9cc0c8ef1d7127997f475ec79dc1a6dad8cb7b651e7e752d07950fa85bbbc2bc227c17287d77a990\n\
+            a2d69ed2ad97d6aa3a85a185da3c36c71a4474436501c849\n\
+            ";
         let program = FontProgram::new(Arc::new(bytes), 0).expect("parse Type 1 font");
         assert_eq!(program.kind(), ProgramKind::Type1);
         let glyph = program.glyph_by_name("A").expect("find glyph A");
